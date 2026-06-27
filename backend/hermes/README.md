@@ -53,10 +53,31 @@ generated audio to private Supabase Storage, and attach a signed URL to `compani
 The Windows bridge returns that URL to the plugin in `reply_items`; the plugin downloads and plays it
 locally. Leave `HERMES_TTS_PROVIDER=none` to keep text-only replies.
 
+On macOS, install and start a local Kokoro-FastAPI service with:
+
+```bash
+bash backend/scripts/install-kokoro-launchagent.sh
+```
+
+The script clones Kokoro-FastAPI into `~/Documents/Kokoro-FastAPI` by default, installs its CPU
+dependencies with `uv`, downloads the model files, and writes a user LaunchAgent named
+`com.gwplaymate.kokoro-fastapi`. Override `KOKORO_ROOT`, `HOST`, or `PORT` before running the script
+if a machine needs different paths or binding.
+
+Create the private Supabase Storage bucket if `backend/supabase/setup.sql` has not already been run:
+
+```bash
+python -m backend.scripts.ensure_tts_storage_bucket
+```
+
+Hermes writes text-only replies if Kokoro is offline or if Storage upload/signing fails. Check those two
+services before debugging the Windows audio fallback.
+
 Health check:
 
 ```bash
 curl http://127.0.0.1:8797/health
+curl http://127.0.0.1:8880/health
 ```
 
 Tests:

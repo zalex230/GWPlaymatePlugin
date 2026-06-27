@@ -84,6 +84,19 @@ python -m backend.hermes.daemon
 
 For the first plumbing test, leave `HERMES_USE_OLLAMA=false`. Once the closed loop works, set `HERMES_USE_OLLAMA=true` and configure `OLLAMA_HOST` / `OLLAMA_MODEL`.
 
+Optional Kokoro TTS audio needs three pieces:
+
+```bash
+bash backend/scripts/install-kokoro-launchagent.sh
+python -m backend.scripts.ensure_tts_storage_bucket
+python -m backend.hermes.daemon
+```
+
+Then set `HERMES_TTS_PROVIDER=kokoro` in `backend/.env`. The Kokoro script installs a local macOS
+LaunchAgent for Kokoro-FastAPI on `127.0.0.1:8880`; the storage script creates the private Supabase
+bucket configured by `HERMES_TTS_STORAGE_BUCKET`. Keep `backend/.env` local because it contains
+service-role credentials.
+
 ## Test
 
 ```powershell
