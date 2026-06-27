@@ -176,17 +176,17 @@ class CompanionReplyRow(BaseModel):
     def to_reply_item(self) -> "ReplyItem":
         return ReplyItem(
             message=self.message,
-            audio_url=self.payload.get("audio_url") or self.payload.get("audio_signed_url"),
-            audio_mime_type=self.payload.get("audio_mime_type"),
-            audio_expires_at=self.payload.get("audio_expires_at"),
+            audio_url=self.payload.get("audio_url") or self.payload.get("audio_signed_url") or "",
+            audio_mime_type=self.payload.get("audio_mime_type") or "",
+            audio_expires_at=self.payload.get("audio_expires_at") or "",
         )
 
 
 class ReplyItem(BaseModel):
     message: str
-    audio_url: str | None = None
-    audio_mime_type: str | None = None
-    audio_expires_at: str | None = None
+    audio_url: str = ""
+    audio_mime_type: str = ""
+    audio_expires_at: str = ""
 
 
 class RepliesResponse(BaseModel):

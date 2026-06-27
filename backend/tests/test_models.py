@@ -71,6 +71,21 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(item.audio_mime_type, "audio/mpeg")
         self.assertTrue(item.audio_url.startswith("https://example.supabase.co/"))
 
+    def test_reply_row_uses_empty_audio_fields_for_text_only_reply(self) -> None:
+        row = CompanionReplyRow(
+            id=2,
+            persona="A Test",
+            message="Text only.",
+            payload={},
+        )
+
+        item = row.to_reply_item()
+
+        self.assertEqual(item.message, "Text only.")
+        self.assertEqual(item.audio_url, "")
+        self.assertEqual(item.audio_mime_type, "")
+        self.assertEqual(item.audio_expires_at, "")
+
     def test_environment_alert_insert_maps_radar_fields(self) -> None:
         event = TelemetryEvent(
             persona="A Test",

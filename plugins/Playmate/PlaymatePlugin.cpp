@@ -957,6 +957,15 @@ void PlaymatePlugin::PollReplies()
         return;
     }
 
+    const auto first_non_space = std::ranges::find_if(content, [](const char ch) {
+        return !std::isspace(static_cast<unsigned char>(ch));
+    });
+    if (first_non_space == content.end() || *first_non_space == '{' || *first_non_space == '[') {
+        std::lock_guard lock(status_mutex_);
+        last_reply_status_ = "Reply JSON parse failed";
+        return;
+    }
+
     QueueReply({Utf8ToWide(content), {}});
 }
 
