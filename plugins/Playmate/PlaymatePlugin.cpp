@@ -19,6 +19,7 @@
 #include <HttpClient.h>
 #include <glaze/glaze.hpp>
 #include <imgui.h>
+#include <sapi.h>
 #include <windows.h>
 
 #include <algorithm>
@@ -35,6 +36,8 @@
 #include <sstream>
 #include <string_view>
 #include <utility>
+
+#pragma comment(lib, "sapi.lib")
 
 namespace {
     PlaymatePlugin* active_plugin = nullptr;
@@ -461,6 +464,47 @@ namespace {
         }
         const std::wstring play = L"play " + current_alias;
         mci_send_string(play.c_str(), nullptr, 0, nullptr);
+    }
+
+    bool SpeakWithWindowsFemaleVoice(const std::wstring& text)
+    {
+        if (text.empty()) {
+            return false;
+        }
+
+        const HRESULT coinit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const bool uninitialize = SUCCEEDED(coinit);
+        if (FAILED(coinit) && coinit != RPC_E_CHANGED_MODE) {
+            return false;
+        }
+
+        ISpVoice* voice = nullptr;
+        HRESULT hr = CoCreateInstance(CLSID_SpVoice, nullptr, CLSCTX_ALL, IID_ISpVoice, reinterpret_cast<void**>(&voice));
+        if (SUCCEEDED(hr) && voice) {
+            ISpObjectTokenCategory* category = nullptr;
+            ISpObjectToken* female_voice = nullptr;
+            IEnumSpObjectTokens* voices = nullptr;
+            if (SUCCEEDED(CoCreateInstance(CLSID_SpObjectTokenCategory, nullptr, CLSCTX_ALL, IID_ISpObjectTokenCategory, reinterpret_cast<void**>(&category))) && category) {
+                if (SUCCEEDED(category->SetId(SPCAT_VOICES, FALSE))
+                    && SUCCEEDED(category->EnumTokens(L"Gender=Female", nullptr, &voices))
+                    && voices) {
+                    ULONG fetched = 0;
+                    if (SUCCEEDED(voices->Next(1, &female_voice, &fetched)) && fetched == 1 && female_voice) {
+                        voice->SetVoice(female_voice);
+                        female_voice->Release();
+                    }
+                    voices->Release();
+                }
+                category->Release();
+            }
+            hr = voice->Speak(text.c_str(), SPF_DEFAULT, nullptr);
+            voice->Release();
+        }
+
+        if (uninitialize) {
+            CoUninitialize();
+        }
+        return SUCCEEDED(hr);
     }
 }
 
@@ -1152,8 +1196,11 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const std::wstring& reply)
         request.SetPostContent(json, ContentFlag::Copy);
 
         if (!request.Perform() || request.GetStatusCode() < 200 || request.GetStatusCode() >= 300 || request.GetContent().empty()) {
+            const bool fallback_spoke = SpeakWithWindowsFemaleVoice(reply);
             std::lock_guard lock(status_mutex_);
-            last_reply_status_ = std::format("TTS failed: HTTP {}", request.GetStatusCode());
+            last_reply_status_ = fallback_spoke
+                ? std::format("GWDevHub TTS rejected plain text; used Windows female voice fallback (HTTP {})", request.GetStatusCode())
+                : std::format("TTS failed: HTTP {}", request.GetStatusCode());
             return;
         }
 
