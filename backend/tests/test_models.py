@@ -4,7 +4,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from backend.shared.models import HermesDecision, TelemetryEvent
+from backend.shared.models import CompanionReplyRow, HermesDecision, TelemetryEvent
 
 
 class ModelTests(unittest.TestCase):
@@ -52,6 +52,24 @@ class ModelTests(unittest.TestCase):
 
         self.assertEqual(row["trigger_log_id"], 7)
         self.assertEqual(row["payload"]["trigger_log_id"], 7)
+
+    def test_reply_row_maps_audio_payload_to_reply_item(self) -> None:
+        row = CompanionReplyRow(
+            id=1,
+            persona="A Test",
+            message="On it.",
+            payload={
+                "audio_url": "https://example.supabase.co/storage/v1/object/sign/playmate-tts/test.mp3",
+                "audio_mime_type": "audio/mpeg",
+                "audio_expires_at": "2026-06-27T12:00:00+00:00",
+            },
+        )
+
+        item = row.to_reply_item()
+
+        self.assertEqual(item.message, "On it.")
+        self.assertEqual(item.audio_mime_type, "audio/mpeg")
+        self.assertTrue(item.audio_url.startswith("https://example.supabase.co/"))
 
     def test_environment_alert_insert_maps_radar_fields(self) -> None:
         event = TelemetryEvent(

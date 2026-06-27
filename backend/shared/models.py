@@ -173,9 +173,25 @@ class CompanionReplyRow(BaseModel):
     def payload_session_id(self) -> str | None:
         return self.session_id or self.payload.get("session_id")
 
+    def to_reply_item(self) -> "ReplyItem":
+        return ReplyItem(
+            message=self.message,
+            audio_url=self.payload.get("audio_url") or self.payload.get("audio_signed_url"),
+            audio_mime_type=self.payload.get("audio_mime_type"),
+            audio_expires_at=self.payload.get("audio_expires_at"),
+        )
+
+
+class ReplyItem(BaseModel):
+    message: str
+    audio_url: str | None = None
+    audio_mime_type: str | None = None
+    audio_expires_at: str | None = None
+
 
 class RepliesResponse(BaseModel):
     replies: list[str] = Field(default_factory=list)
+    reply_items: list[ReplyItem] = Field(default_factory=list)
 
 
 class HermesEventResponse(BaseModel):

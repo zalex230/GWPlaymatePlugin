@@ -101,6 +101,23 @@ private:
 
     struct RepliesResponse {
         std::vector<std::string> replies;
+        struct ReplyItem {
+            std::string message;
+            std::string audio_url;
+            std::string audio_mime_type;
+            std::string audio_expires_at;
+        };
+        std::vector<ReplyItem> reply_items;
+    };
+
+    struct QueuedReply {
+        std::wstring message;
+        std::string audio_url;
+    };
+
+    struct QueuedTtsRequest {
+        std::wstring message;
+        std::string audio_url;
     };
 
     struct EnvironmentScan {
@@ -138,11 +155,11 @@ private:
     void QueueGameplayEvent(TelemetryEvent event);
     void QueueSnapshotEvent(const char* event_type);
     void MaybeQueueEnvironmentAlert();
-    void QueueReply(std::wstring reply);
+    void QueueReply(QueuedReply reply);
     void FlushRepliesToChat();
     void ShowCompanionSpeechBubble(const std::wstring& reply) const;
-    void QueueCompanionTts(std::wstring reply);
-    void GenerateAndPlayCompanionTts(const std::wstring& reply);
+    void QueueCompanionTts(QueuedTtsRequest request);
+    void GenerateAndPlayCompanionTts(const QueuedTtsRequest& request);
     void ApplyConfig();
     void SetStatus(std::string status);
 
@@ -201,8 +218,8 @@ private:
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::deque<TelemetryEvent> outbound_;
-    std::deque<std::wstring> inbound_replies_;
-    std::deque<std::wstring> tts_requests_;
+    std::deque<QueuedReply> inbound_replies_;
+    std::deque<QueuedTtsRequest> tts_requests_;
 
     mutable std::mutex status_mutex_;
     std::string status_ = "Idle";

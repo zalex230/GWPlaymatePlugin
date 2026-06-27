@@ -118,6 +118,19 @@ create index if not exists memories_type_created_idx
 create index if not exists memories_tags_idx
     on public.memories using gin (tags);
 
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+    'playmate-tts',
+    'playmate-tts',
+    false,
+    5242880,
+    array['audio/mpeg', 'audio/wav', 'audio/ogg']::text[]
+)
+on conflict (id) do update set
+    public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
 do $$
 begin
     if not exists (

@@ -108,7 +108,8 @@ def get_replies(persona: str | None = None, session_id: str | None = None, limit
             consumed_at = datetime.now(timezone.utc).isoformat()
             ids = [row.id for row in rows]
             client.table(COMPANION_REPLIES_TABLE).update({"consumed_at": consumed_at}).in_("id", ids).execute()
-        return RepliesResponse(replies=[row.message for row in rows])
+        reply_items = [row.to_reply_item() for row in rows]
+        return RepliesResponse(replies=[item.message for item in reply_items], reply_items=reply_items)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

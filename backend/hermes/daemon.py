@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import hashlib
 import json
 import re
 import time
@@ -1662,10 +1663,117 @@ def _supabase_configured() -> bool:
     return bool(settings.supabase_url and settings.supabase_service_key)
 
 
+def _audio_mime_type(audio_format: str) -> str:
+    normalized = audio_format.strip().lower()
+    if normalized == "wav":
+        return "audio/wav"
+    if normalized == "ogg":
+        return "audio/ogg"
+    return "audio/mpeg"
+
+
+def _kokoro_tts_payload(text: str) -> dict[str, Any]:
+    return {
+        "model": settings.kokoro_tts_model,
+        "input": text,
+        "voice": settings.kokoro_tts_voice,
+        "response_format": settings.kokoro_tts_format,
+    }
+
+
+def generate_kokoro_audio(text: str) -> tuple[bytes, str] | None:
+    if not text.strip():
+        return None
+
+    body = json.dumps(_kokoro_tts_payload(text)).encode("utf-8")
+    request = urllib.request.Request(
+        settings.kokoro_tts_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": _audio_mime_type(settings.kokoro_tts_format),
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=settings.kokoro_tts_timeout_seconds) as response:
+        status = getattr(response, "status", 200)
+        audio = response.read()
+    if status < 200 or status >= 300 or not audio:
+        return None
+    return audio, _audio_mime_type(settings.kokoro_tts_format)
+
+
+def _reply_audio_path(reply: CompanionReplyInsert) -> str:
+    extension = settings.kokoro_tts_format.strip().lower() or "mp3"
+    if extension == "mpeg":
+        extension = "mp3"
+    persona = re.sub(r"[^a-zA-Z0-9_-]+", "-", reply.persona.strip().lower()).strip("-") or "persona"
+    session = re.sub(r"[^a-zA-Z0-9_-]+", "-", reply.session_id.strip().lower()).strip("-") or "session"
+    digest = hashlib.sha256(
+        f"{reply.persona}|{reply.session_id}|{reply.trigger_log_id}|{reply.message}".encode("utf-8")
+    ).hexdigest()[:20]
+    return f"{session}/{persona}/{int(time.time())}-{digest}.{extension}"
+
+
+def _signed_url_value(response: Any) -> str | None:
+    data = getattr(response, "data", None) or response
+    if isinstance(data, dict):
+        value = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def attach_tts_audio(reply: CompanionReplyInsert) -> CompanionReplyInsert:
+    if settings.hermes_tts_provider not in {"kokoro", "kokoro-local"}:
+        return reply
+    if not _supabase_configured():
+        return reply
+
+    try:
+        generated = generate_kokoro_audio(reply.message)
+        if not generated:
+            return reply
+        audio, mime_type = generated
+        client = create_supabase_client(settings)
+        bucket = settings.hermes_tts_storage_bucket
+        path = _reply_audio_path(reply)
+        storage = client.storage.from_(bucket)
+        storage.upload(
+            path=path,
+            file=audio,
+            file_options={
+                "content-type": mime_type,
+                "upsert": "true",
+            },
+        )
+        signed = _signed_url_value(storage.create_signed_url(path, settings.hermes_tts_signed_url_seconds))
+        if not signed:
+            return reply
+        metadata = {
+            **reply.metadata,
+            "audio_url": signed,
+            "audio_storage_bucket": bucket,
+            "audio_storage_path": path,
+            "audio_mime_type": mime_type,
+            "audio_expires_at": datetime.fromtimestamp(
+                time.time() + settings.hermes_tts_signed_url_seconds,
+                timezone.utc,
+            ).isoformat(),
+            "tts_provider": settings.hermes_tts_provider,
+            "tts_voice": settings.kokoro_tts_voice,
+        }
+        return reply.model_copy(update={"metadata": metadata})
+    except Exception as exc:
+        print(f"Hermes TTS audio unavailable: {exc}")
+        return reply
+
+
 def insert_reply(reply: CompanionReplyInsert, *, consumed: bool = False) -> None:
     if not _supabase_configured():
         return
     client = create_supabase_client(settings)
+    reply = attach_tts_audio(reply)
     row = reply.to_supabase_insert()
     if consumed:
         row["consumed_at"] = utc_now_iso()

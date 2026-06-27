@@ -466,6 +466,44 @@ namespace {
         mci_send_string(play.c_str(), nullptr, 0, nullptr);
     }
 
+    bool DownloadAudioUrl(const std::string& url, const std::filesystem::path& audio_path, std::string* error)
+    {
+        if (url.empty()) {
+            if (error) {
+                *error = "empty audio URL";
+            }
+            return false;
+        }
+
+        HttpRequest request;
+        request.SetUrl(url.c_str());
+        request.SetMethod(HttpMethod::Get);
+        request.SetUserAgent("GWToolbox++ Playmate");
+        request.SetTimeoutMs(15000);
+        request.SetConnectTimeoutMs(2500);
+        request.SetFollowLocation(true);
+        request.SetVerifyHost(false);
+        request.SetVerifyPeer(false);
+        request.SetHeader("Accept", "audio/mpeg,audio/wav,audio/*");
+
+        if (!request.Perform() || request.GetStatusCode() < 200 || request.GetStatusCode() >= 300 || request.GetContent().empty()) {
+            if (error) {
+                *error = std::format("audio download failed: HTTP {}", request.GetStatusCode());
+            }
+            return false;
+        }
+
+        std::ofstream out(audio_path, std::ios::binary);
+        out.write(request.GetContent().data(), static_cast<std::streamsize>(request.GetContent().size()));
+        if (!out.good()) {
+            if (error) {
+                *error = "audio cache write failed";
+            }
+            return false;
+        }
+        return true;
+    }
+
     bool SpeakWithWindowsFemaleVoice(const std::wstring& text)
     {
         if (text.empty()) {
@@ -614,7 +652,7 @@ void PlaymatePlugin::DrawSettings()
     config_changed |= ImGui::Checkbox("Send telemetry to backend", &send_to_backend_);
     config_changed |= ImGui::Checkbox("Inject companion replies into party chat", &inject_replies_);
     config_changed |= ImGui::Checkbox("Show companion speech bubbles", &show_speech_bubbles_);
-    config_changed |= ImGui::Checkbox("Speak companion replies with GWDevHub TTS", &speak_replies_);
+    config_changed |= ImGui::Checkbox("Speak companion replies", &speak_replies_);
     config_changed |= ImGui::Checkbox("Enable environment radar", &environment_radar_);
     config_changed |= ImGui::InputText("Local backend URL", backend_url_input_, sizeof(backend_url_input_));
     config_changed |= ImGui::InputText("Local API token", api_token_input_, sizeof(api_token_input_), ImGuiInputTextFlags_Password);
@@ -902,15 +940,24 @@ void PlaymatePlugin::PollReplies()
 
     RepliesResponse parsed;
     if (auto ec = glz::read_json(parsed, content); !ec) {
-        for (const auto& reply : parsed.replies) {
-            if (!reply.empty()) {
-                QueueReply(Utf8ToWide(reply));
+        if (!parsed.reply_items.empty()) {
+            for (const auto& reply : parsed.reply_items) {
+                if (!reply.message.empty()) {
+                    QueueReply({Utf8ToWide(reply.message), reply.audio_url});
+                }
+            }
+        }
+        else {
+            for (const auto& reply : parsed.replies) {
+                if (!reply.empty()) {
+                    QueueReply({Utf8ToWide(reply), {}});
+                }
             }
         }
         return;
     }
 
-    QueueReply(Utf8ToWide(content));
+    QueueReply({Utf8ToWide(content), {}});
 }
 
 void PlaymatePlugin::QueueTelemetry(std::string event_type, std::string sender, std::string channel, std::string message)
@@ -1100,9 +1147,9 @@ void PlaymatePlugin::MaybeQueueEnvironmentAlert()
     last_in_combat_ = scan.in_combat;
 }
 
-void PlaymatePlugin::QueueReply(std::wstring reply)
+void PlaymatePlugin::QueueReply(QueuedReply reply)
 {
-    if (reply.empty()) {
+    if (reply.message.empty()) {
         return;
     }
     {
@@ -1117,16 +1164,16 @@ void PlaymatePlugin::FlushRepliesToChat()
         return;
     }
 
-    std::deque<std::wstring> replies;
+    std::deque<QueuedReply> replies;
     {
         std::lock_guard lock(queue_mutex_);
         replies.swap(inbound_replies_);
     }
     for (const auto& reply : replies) {
         const auto persona = CurrentPersonaNameWide();
-        ShowCompanionSpeechBubble(reply);
-        QueueCompanionTts(reply);
-        GW::Chat::WriteChat(GW::Chat::CHANNEL_GROUP, reply.c_str(), persona.c_str(), true);
+        ShowCompanionSpeechBubble(reply.message);
+        QueueCompanionTts({reply.message, reply.audio_url});
+        GW::Chat::WriteChat(GW::Chat::CHANNEL_GROUP, reply.message.c_str(), persona.c_str(), true);
         std::lock_guard lock(status_mutex_);
         ++received_count_;
         waiting_for_reply_ = false;
@@ -1135,13 +1182,13 @@ void PlaymatePlugin::FlushRepliesToChat()
     }
 }
 
-void PlaymatePlugin::QueueCompanionTts(std::wstring reply)
+void PlaymatePlugin::QueueCompanionTts(QueuedTtsRequest request)
 {
     if (!tts_enabled_.load()) {
         return;
     }
-    reply = TtsMessage(reply);
-    if (reply.empty()) {
+    request.message = TtsMessage(request.message);
+    if (request.message.empty() && request.audio_url.empty()) {
         return;
     }
     {
@@ -1149,13 +1196,14 @@ void PlaymatePlugin::QueueCompanionTts(std::wstring reply)
         if (tts_requests_.size() >= 4) {
             tts_requests_.pop_front();
         }
-        tts_requests_.push_back(std::move(reply));
+        tts_requests_.push_back(std::move(request));
     }
     queue_cv_.notify_one();
 }
 
-void PlaymatePlugin::GenerateAndPlayCompanionTts(const std::wstring& reply)
+void PlaymatePlugin::GenerateAndPlayCompanionTts(const QueuedTtsRequest& request)
 {
+    const std::wstring& reply = request.message;
     if (reply.empty()) {
         return;
     }
@@ -1167,6 +1215,28 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const std::wstring& reply)
         std::lock_guard lock(status_mutex_);
         last_reply_status_ = "TTS cache unavailable";
         return;
+    }
+
+    if (!request.audio_url.empty()) {
+        const auto cache_key = std::format("{:x}.mp3", std::hash<std::string>{}(request.audio_url));
+        const auto audio_path = cache_dir / cache_key;
+        if (!std::filesystem::exists(audio_path)) {
+            std::string error;
+            if (!DownloadAudioUrl(request.audio_url, audio_path, &error)) {
+                std::lock_guard lock(status_mutex_);
+                last_reply_status_ = error.empty() ? "Companion audio download failed" : error;
+            }
+            else {
+                std::lock_guard lock(status_mutex_);
+                last_reply_status_ = "Companion audio downloaded";
+            }
+        }
+        if (std::filesystem::exists(audio_path)) {
+            GW::GameThread::Enqueue([audio_path] {
+                PlayMp3Async(audio_path);
+            });
+            return;
+        }
     }
 
     const auto cache_key = std::format("{:x}_{}.mp3", std::hash<std::wstring>{}(reply), reply.size());
@@ -1181,31 +1251,31 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const std::wstring& reply)
         request_body["speaker_race"] = "Human";
         request_body["player_gender"] = "f";
 
-        HttpRequest request;
-        request.SetUrl("https://tts.gwtoolbox.com/decode.mp3");
-        request.SetMethod(HttpMethod::Post);
-        request.SetUserAgent("GWToolbox++ Playmate");
-        request.SetTimeoutMs(10000);
-        request.SetConnectTimeoutMs(2500);
-        request.SetFollowLocation(true);
-        request.SetVerifyHost(false);
-        request.SetVerifyPeer(false);
-        request.SetHeader("Content-Type", "application/json");
-        request.SetHeader("Accept", "audio/mpeg");
+        HttpRequest tts_request;
+        tts_request.SetUrl("https://tts.gwtoolbox.com/decode.mp3");
+        tts_request.SetMethod(HttpMethod::Post);
+        tts_request.SetUserAgent("GWToolbox++ Playmate");
+        tts_request.SetTimeoutMs(10000);
+        tts_request.SetConnectTimeoutMs(2500);
+        tts_request.SetFollowLocation(true);
+        tts_request.SetVerifyHost(false);
+        tts_request.SetVerifyPeer(false);
+        tts_request.SetHeader("Content-Type", "application/json");
+        tts_request.SetHeader("Accept", "audio/mpeg");
         const auto json = glz::write_json(request_body).value_or(std::string{});
-        request.SetPostContent(json, ContentFlag::Copy);
+        tts_request.SetPostContent(json, ContentFlag::Copy);
 
-        if (!request.Perform() || request.GetStatusCode() < 200 || request.GetStatusCode() >= 300 || request.GetContent().empty()) {
+        if (!tts_request.Perform() || tts_request.GetStatusCode() < 200 || tts_request.GetStatusCode() >= 300 || tts_request.GetContent().empty()) {
             const bool fallback_spoke = SpeakWithWindowsFemaleVoice(reply);
             std::lock_guard lock(status_mutex_);
             last_reply_status_ = fallback_spoke
-                ? std::format("GWDevHub TTS rejected plain text; used Windows female voice fallback (HTTP {})", request.GetStatusCode())
-                : std::format("TTS failed: HTTP {}", request.GetStatusCode());
+                ? std::format("GWDevHub TTS rejected plain text; used Windows female voice fallback (HTTP {})", tts_request.GetStatusCode())
+                : std::format("TTS failed: HTTP {}", tts_request.GetStatusCode());
             return;
         }
 
         std::ofstream out(audio_path, std::ios::binary);
-        out.write(request.GetContent().data(), static_cast<std::streamsize>(request.GetContent().size()));
+        out.write(tts_request.GetContent().data(), static_cast<std::streamsize>(tts_request.GetContent().size()));
         if (!out.good()) {
             std::lock_guard lock(status_mutex_);
             last_reply_status_ = "TTS cache write failed";

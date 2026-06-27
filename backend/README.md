@@ -7,6 +7,8 @@ GWPlaymate.dll -> Windows localhost bridge -> Supabase -> Hermes daemon -> Ollam
 ```
 
 The C++ plugin still captures local JSONL logs. Cloud credentials live only in these Python services.
+When Hermes generates TTS audio, it uploads the file to private Supabase Storage and stores a short-lived
+signed URL on the companion reply. The plugin downloads that URL and plays it locally on the Gaming PC.
 
 ## Layout
 
@@ -80,6 +82,22 @@ model setup. Set `HERMES_USE_OLLAMA=true` when the pipe is proven and Ollama is 
 
 Replies are written to `companion_replies`, not back into `game_logs`, and include `trigger_log_id`
 when the source Supabase row is available.
+
+### Optional Kokoro TTS
+
+For higher-quality voice, run a Kokoro-compatible TTS server on the Mac Mini and set:
+
+```bash
+HERMES_TTS_PROVIDER=kokoro
+KOKORO_TTS_URL=http://127.0.0.1:8880/v1/audio/speech
+KOKORO_TTS_VOICE=af_bella
+HERMES_TTS_STORAGE_BUCKET=playmate-tts
+HERMES_TTS_SIGNED_URL_SECONDS=600
+```
+
+Run `backend/supabase/setup.sql` once so the private `playmate-tts` Storage bucket exists. Hermes uses
+the service-role key to upload audio and create signed URLs; the plugin only receives the signed URL.
+If Kokoro or Storage fails, Hermes still writes the text reply and the plugin falls back to local speech.
 
 ## Closed-loop smoke test
 

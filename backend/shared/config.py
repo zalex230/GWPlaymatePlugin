@@ -56,6 +56,14 @@ class BackendSettings:
     hermes_min_speak_seconds: float = _float_env("HERMES_MIN_SPEAK_SECONDS", 20.0)
     recent_chat_limit: int = _int_env("HERMES_RECENT_CHAT_LIMIT", 10)
     recent_alert_limit: int = _int_env("HERMES_RECENT_ALERT_LIMIT", 8)
+    hermes_tts_provider: str = os.getenv("HERMES_TTS_PROVIDER", "none").strip().lower()
+    hermes_tts_storage_bucket: str = os.getenv("HERMES_TTS_STORAGE_BUCKET", "playmate-tts")
+    hermes_tts_signed_url_seconds: int = _int_env("HERMES_TTS_SIGNED_URL_SECONDS", 600)
+    kokoro_tts_url: str = os.getenv("KOKORO_TTS_URL", "http://127.0.0.1:8880/v1/audio/speech")
+    kokoro_tts_model: str = os.getenv("KOKORO_TTS_MODEL", "kokoro")
+    kokoro_tts_voice: str = os.getenv("KOKORO_TTS_VOICE", "af_bella")
+    kokoro_tts_format: str = os.getenv("KOKORO_TTS_FORMAT", "mp3")
+    kokoro_tts_timeout_seconds: float = _float_env("KOKORO_TTS_TIMEOUT_SECONDS", 20.0)
 
 
 def load_settings() -> BackendSettings:

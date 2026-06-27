@@ -21,6 +21,62 @@ class _FakeSupabase:
         return _FakeTable()
 
 
+class _FakeReplyTable:
+    def __init__(self):
+        self.updated_ids = []
+
+    def select(self, _columns):
+        return self
+
+    def is_(self, _column, _value):
+        return self
+
+    def order(self, _column, desc=False):
+        return self
+
+    def limit(self, _limit):
+        return self
+
+    def eq(self, _column, _value):
+        return self
+
+    def update(self, _payload):
+        return self
+
+    def in_(self, _column, values):
+        self.updated_ids = values
+        return self
+
+    def execute(self):
+        return type(
+            "Response",
+            (),
+            {
+                "data": [
+                    {
+                        "id": 10,
+                        "persona": "A Test",
+                        "message": "I hear you.",
+                        "channel": "party",
+                        "payload": {
+                            "session_id": "local-playtest",
+                            "audio_url": "https://example.supabase.co/storage/v1/object/sign/playmate-tts/test.mp3",
+                            "audio_mime_type": "audio/mpeg",
+                        },
+                    }
+                ]
+            },
+        )()
+
+
+class _FakeReplySupabase:
+    def __init__(self):
+        self.reply_table = _FakeReplyTable()
+
+    def table(self, _name):
+        return self.reply_table
+
+
 class WindowsBridgeTests(unittest.TestCase):
     def test_health(self) -> None:
         client = TestClient(app)
@@ -106,6 +162,20 @@ class WindowsBridgeTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"accepted": True})
+
+    def test_get_replies_returns_audio_reply_items(self) -> None:
+        client = TestClient(app)
+        fake = _FakeReplySupabase()
+
+        with patch("backend.windows_bridge.app._client", return_value=fake):
+            response = client.get("/v1/playmate/replies?persona=A%20Test")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["replies"], ["I hear you."])
+        self.assertEqual(body["reply_items"][0]["message"], "I hear you.")
+        self.assertEqual(body["reply_items"][0]["audio_mime_type"], "audio/mpeg")
+        self.assertEqual(fake.reply_table.updated_ids, [10])
 
 
 if __name__ == "__main__":

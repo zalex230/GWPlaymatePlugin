@@ -38,8 +38,20 @@ Useful environment variables live in `backend/.env`:
 - `OLLAMA_MODEL`
 - `OLLAMA_NUM_CTX`
 - `OLLAMA_NUM_PREDICT`
+- `HERMES_TTS_PROVIDER`
+- `KOKORO_TTS_URL`
+- `KOKORO_TTS_VOICE`
+- `HERMES_TTS_STORAGE_BUCKET`
+- `HERMES_TTS_SIGNED_URL_SECONDS`
 
 Do not commit `backend/.env`; it contains service-role credentials.
+
+## TTS audio over Supabase
+
+Set `HERMES_TTS_PROVIDER=kokoro` to have Hermes call a local Kokoro-compatible endpoint, upload the
+generated audio to private Supabase Storage, and attach a signed URL to `companion_replies.payload`.
+The Windows bridge returns that URL to the plugin in `reply_items`; the plugin downloads and plays it
+locally. Leave `HERMES_TTS_PROVIDER=none` to keep text-only replies.
 
 Health check:
 
