@@ -327,6 +327,19 @@ namespace {
         return {};
     }
 
+    std::string LivingAgentName(const GW::AgentLiving* living)
+    {
+        if (!living) {
+            return {};
+        }
+        if (living->login_number) {
+            return WideToUtf8(GW::Agents::GetPlayerNameByLoginNumber(living->login_number));
+        }
+        std::wstring decoded_name;
+        GW::Agents::AsyncGetAgentName(living, decoded_name);
+        return WideToUtf8(decoded_name.c_str());
+    }
+
     bool IsReplyTriggerEvent(const std::string& event_type)
     {
         static constexpr std::string_view triggers[] = {
@@ -848,6 +861,8 @@ void PlaymatePlugin::QueueEnvironmentAlert(std::string alert_type, std::string s
     event.dead_hostile_count = scan.dead_hostile_count;
     event.closest_hostile_agent_id = scan.closest_hostile_agent_id;
     event.closest_hostile_distance = scan.closest_hostile_distance;
+    event.agent_id = scan.selected_target_agent_id;
+    event.agent_name = scan.selected_target_name;
     event.alert_type = std::move(alert_type);
     event.severity = std::move(severity);
 
@@ -928,7 +943,7 @@ void PlaymatePlugin::MaybeQueueEnvironmentAlert()
         QueueEnvironmentAlert(
             "under_attack",
             (crossed_below_half_hp || scan.player_hp < 0.35f) ? "HIGH" : "NORMAL",
-            std::format("Player is under attack. Health is at {:.0f} percent.", scan.player_hp * 100.0f),
+            std::format("Azele is taking hits. Health is at {:.0f} percent.", scan.player_hp * 100.0f),
             scan);
     }
     else if (danger_spike) {
@@ -939,7 +954,14 @@ void PlaymatePlugin::MaybeQueueEnvironmentAlert()
             scan);
     }
     else if (combat_started) {
-        QueueEnvironmentAlert("combat_started", "HIGH", "Combat started.", scan);
+        const std::string target_label = scan.selected_target_name.empty() ? "selected target" : scan.selected_target_name;
+        QueueEnvironmentAlert(
+            "combat_started",
+            "HIGH",
+            scan.selected_target_agent_id
+                ? std::format("Combat started with {} selected.", target_label)
+                : "Combat started.",
+            scan);
     }
     else if (entered_close_range) {
         QueueEnvironmentAlert(
@@ -1111,6 +1133,19 @@ PlaymatePlugin::EnvironmentScan PlaymatePlugin::BuildEnvironmentScan() const
     scan.player_y = me->pos.y;
     scan.player_hp = me->hp;
     scan.closest_hostile_distance = std::numeric_limits<float>::max();
+
+    const GW::AgentLiving* selected_target = GW::Agents::GetTargetAsAgentLiving();
+    if (selected_target
+        && selected_target != me
+        && selected_target->allegiance == GW::Constants::Allegiance::Enemy
+        && selected_target->GetIsAlive()) {
+        const float target_distance = Distance2D(me->pos, selected_target->pos);
+        if (target_distance <= GW::Constants::Range::Compass) {
+            scan.selected_target_agent_id = selected_target->agent_id;
+            scan.selected_target_name = LivingAgentName(selected_target);
+            scan.selected_target_distance = target_distance;
+        }
+    }
 
     for (const GW::Agent* agent : *agents) {
         if (!agent || agent == me || !GW::Agents::GetAgentMatchesFlags(agent, GW::TargetFilter::AnyLiving)) {

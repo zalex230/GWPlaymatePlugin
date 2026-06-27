@@ -19,7 +19,8 @@ This repository intentionally does not vendor the full GWToolbox++ source tree. 
 
 - `plugins/Playmate/` contains the C++ plugin source and local log review tool.
 - `backend/windows_bridge/` exposes the plugin-compatible HTTP API on `127.0.0.1:8787`.
-- `backend/hermes_daemon/` watches Supabase, keeps bounded world state, and writes companion replies.
+- `backend/hermes/` watches Supabase, keeps bounded world state, exposes Hermes health/event endpoints, writes companion replies, and maintains compact memories.
+- `backend/hermes_daemon/` is a compatibility wrapper for older launch commands.
 - `backend/shared/` contains shared Pydantic models, constants, throttling, and state helpers.
 - `backend/supabase/` contains SQL setup for the expected tables and realtime publication.
 - `backend/tests/` covers bridge validation, Hermes behavior, state, and throttling.
@@ -78,7 +79,7 @@ python -m backend.windows_bridge.app
 Run Hermes on the machine that hosts the local model or fallback daemon:
 
 ```bash
-python -m backend.hermes_daemon.daemon
+python -m backend.hermes.daemon
 ```
 
 For the first plumbing test, leave `HERMES_USE_OLLAMA=false`. Once the closed loop works, set `HERMES_USE_OLLAMA=true` and configure `OLLAMA_HOST` / `OLLAMA_MODEL`.

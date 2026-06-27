@@ -114,6 +114,9 @@ private:
         uint32_t closest_hostile_agent_id = 0;
         float closest_hostile_distance = 0.0f;
         bool in_combat = false;
+        uint32_t selected_target_agent_id = 0;
+        std::string selected_target_name;
+        float selected_target_distance = 0.0f;
     };
 
     struct DecodedMapName {

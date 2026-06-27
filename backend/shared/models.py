@@ -178,6 +178,12 @@ class RepliesResponse(BaseModel):
     replies: list[str] = Field(default_factory=list)
 
 
+class HermesEventResponse(BaseModel):
+    accepted: bool = True
+    replies: list[str] = Field(default_factory=list)
+    audit_error: str | None = None
+
+
 class MemoryInsert(BaseModel):
     character_name: str
     summary_text: str
@@ -186,7 +192,7 @@ class MemoryInsert(BaseModel):
     title: str | None = None
     map_id: int | None = None
     active_quest_id: int | None = None
-    rare_items: list[dict[str, Any]] = Field(default_factory=list)
+    rare_items: list[Any] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     source_log_start_id: int | None = None
     source_log_end_id: int | None = None
@@ -218,6 +224,25 @@ class MemoryInsert(BaseModel):
         if self.embedding is not None:
             row["embedding"] = self.embedding
         return row
+
+
+class MemoryRow(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: int | None = None
+    created_at: str | None = None
+    character_name: str
+    session_id: str = "local-playtest"
+    memory_type: str = "session_summary"
+    title: str | None = None
+    summary_text: str = ""
+    map_id: int | None = None
+    active_quest_id: int | None = None
+    rare_items: list[Any] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    source_log_start_id: int | None = None
+    source_log_end_id: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class HermesDecision(BaseModel):
