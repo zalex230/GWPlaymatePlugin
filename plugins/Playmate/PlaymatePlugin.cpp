@@ -1089,6 +1089,13 @@ void PlaymatePlugin::QueueGameplayEvent(TelemetryEvent event)
 
 void PlaymatePlugin::QueueSnapshotEvent(const char* event_type)
 {
+    if (!event_type || !*event_type) {
+        return;
+    }
+    const std::string_view type(event_type);
+    if (type == "map_loaded" && !GW::Map::GetIsMapLoaded()) {
+        return;
+    }
     QueueTelemetry(event_type, "System", "system", event_type);
 }
 

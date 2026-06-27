@@ -16,6 +16,7 @@ from backend.hermes_daemon.daemon import (
     gw_wiki_search_query,
     is_stale_polled_record,
     last_map_comment_by_session,
+    map_comment_variant_by_session,
     likely_gw_wiki_question,
     model_reply_has_bad_shape,
     process_event,
@@ -30,6 +31,7 @@ class HermesDaemonTests(unittest.TestCase):
         recent_reply_texts.clear()
         gw_wiki_cache.clear()
         last_map_comment_by_session.clear()
+        map_comment_variant_by_session.clear()
         world_state.last_spoken_at = 0
 
     def test_event_from_game_log_uses_metadata(self) -> None:
@@ -367,6 +369,46 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual([reply.message for reply in replies], ["Foible's Fair. Small, but I know it."])
 
+    def test_map_arrival_comments_rotate_by_map(self) -> None:
+        first = process_event(
+            event_from_game_log(
+                {
+                    "sender": "System",
+                    "channel": "system",
+                    "message": "map_loaded",
+                    "metadata": {
+                        "event_type": "map_loaded",
+                        "persona": "Azele",
+                        "session_id": "map-rotate-a",
+                        "map_id": 148,
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+        last_map_comment_by_session.clear()
+        world_state.last_spoken_at = 0
+        second = process_event(
+            event_from_game_log(
+                {
+                    "sender": "System",
+                    "channel": "system",
+                    "message": "map_loaded",
+                    "metadata": {
+                        "event_type": "map_loaded",
+                        "persona": "Azele",
+                        "session_id": "map-rotate-a",
+                        "map_id": 148,
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(first[0].message, second[0].message)
+
     def test_transition_start_map_change_does_not_quip(self) -> None:
         replies = process_event(
             event_from_game_log(
@@ -386,6 +428,46 @@ class HermesDaemonTests(unittest.TestCase):
         )
 
         self.assertEqual(replies, [])
+
+    def test_map_changed_snapshot_does_not_make_arrival_quip(self) -> None:
+        replies = process_event(
+            event_from_game_log(
+                {
+                    "sender": "System",
+                    "channel": "system",
+                    "message": "map_changed",
+                    "metadata": {
+                        "event_type": "map_changed",
+                        "persona": "Azele",
+                        "session_id": "map-test",
+                        "map_id": 148,
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+
+        self.assertEqual(replies, [])
+
+    def test_npc_dialogue_can_trigger_azele_aside(self) -> None:
+        replies = process_event(
+            event_from_game_log(
+                {
+                    "sender": "Game",
+                    "channel": "local",
+                    "message": "The Charr have been seen near the Wall.",
+                    "payload": {
+                        "event_type": "chat_log",
+                        "persona": "Azele",
+                        "session_id": "npc-dialogue",
+                        "map_id": 148,
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+
+        self.assertEqual([reply.message for reply in replies], ["See? Not just me being dramatic. We should be ready."])
 
     def test_reply_can_include_trigger_log_id(self) -> None:
         decision = fallback_rule_decision(

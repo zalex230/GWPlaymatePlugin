@@ -43,6 +43,7 @@ world_state = LiveWorldState(
     session_id=settings.active_session,
 )
 recent_reply_texts: deque[str] = deque(maxlen=12)
+map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
 VISIBLE_ENEMY_RANGE = 900.0
 PERSONA_MEMORY_DIR = Path(__file__).with_name("personas")
@@ -69,6 +70,11 @@ SPEAKING_ENVIRONMENT_ALERT_TYPES = {"under_attack", "danger_spike", "party_membe
 EMERGENCY_ALERT_TYPES = {"under_attack", "party_member_down", "combat_started"}
 NOTABLE_CHAT_PATTERNS = re.compile(
     r"\b(gold|green|unique|rare|drop|dropped|item|chest|boss|elite|skill|quest|completed|morale|death|died|resurrect|shrine)\b",
+    re.IGNORECASE,
+)
+NPC_DIALOGUE_CHANNELS = {"local", "emote"}
+NPC_DIALOGUE_IGNORE_PATTERNS = re.compile(
+    r"\b(?:gwtoolbox|plugins detected|trade|wts|wtb|lfg|district|server|error)\b",
     re.IGNORECASE,
 )
 LOW_QUALITY_REPLY_PATTERNS = re.compile(
@@ -127,7 +133,7 @@ memory_last_write_at: dict[tuple[str, str], float] = {}
 memory_lock = Lock()
 last_map_comment_by_session: dict[tuple[str, str], int] = {}
 gw_wiki_cache: dict[str, tuple[float, str]] = {}
-MAP_COMMENT_EVENT_TYPES = {"map_changed", "map_loaded"}
+MAP_COMMENT_EVENT_TYPES = {"map_loaded"}
 KNOWN_PRESEARING_MAP_NAMES = {
     146: "Lakeside County",
     147: "The Northlands",
@@ -260,7 +266,9 @@ def memory_event_from(event: TelemetryEvent, record_id: int | None) -> dict[str,
     if event.event_type not in MEMORY_MEANINGFUL_EVENT_TYPES:
         return None
     message = readable_game_text(event.message) or event.event_type
-    if event.event_type == "chat_log" and not NOTABLE_CHAT_PATTERNS.search(message):
+    if event.event_type == "chat_log" and not (
+        NOTABLE_CHAT_PATTERNS.search(message) or is_npc_dialogue_event(event)
+    ):
         return None
     return {
         "record_id": record_id,
@@ -747,6 +755,19 @@ def gw_wiki_context(event: TelemetryEvent) -> str:
     return context or "None"
 
 
+def is_npc_dialogue_event(event: TelemetryEvent) -> bool:
+    if event.event_type != "chat_log":
+        return False
+    if event.channel not in NPC_DIALOGUE_CHANNELS:
+        return False
+    message = readable_game_text(event.message)
+    if len(message) < 8 or len(message) > 220:
+        return False
+    if NPC_DIALOGUE_IGNORE_PATTERNS.search(message):
+        return False
+    return bool(re.search(r"[A-Za-z]{3,}", message))
+
+
 def persona_living_notes(persona: str) -> str:
     slug = re.sub(r"[^a-z0-9_-]+", "-", persona.strip().lower()).strip("-")
     if not slug:
@@ -900,6 +921,84 @@ def map_lore_hint(event: TelemetryEvent) -> str:
     return ""
 
 
+MAP_COMMENT_VARIANTS: dict[str, list[str]] = {
+    "lakeside county": [
+        "Lakeside again. I used to run through here when I was younger.",
+        "Lakeside still smells like grass and river water. I missed that a little.",
+        "I know these paths. Try not to make me admit I’m sentimental.",
+    ],
+    "ascalon city": [
+        "Ascalon City. Good, we can breathe for a minute.",
+        "Home streets. Stand up straight, people notice things here.",
+        "Back in the city. I always feel like I should look composed here.",
+    ],
+    "ashford abbey": [
+        "Ashford Abbey. Quiet, at least for now.",
+        "Ashford always makes me feel like I should whisper. Annoying, honestly.",
+        "I had lessons near here once. I was very impressive, obviously.",
+    ],
+    "regent valley": [
+        "Regent Valley. Open roads, so keep an eye out.",
+        "Regent Valley. Farms, patrol roads, and too much room for trouble.",
+        "I like the air out here. I do not like how exposed it feels.",
+    ],
+    "the northlands": [
+        "Past the Wall. Stay close.",
+        "Northlands. If the Charr are near, we do this carefully.",
+        "This far past the Wall, I stop pretending I’m relaxed.",
+    ],
+    "green hills county": [
+        "Green Hills. Pretty enough, if you ignore the mud.",
+        "Barradin land always feels too polished from a distance.",
+        "Green Hills again. Try not to drag me through every puddle.",
+    ],
+    "wizard's folly": [
+        "Wizard's Folly. Cold enough to be annoying.",
+        "I practiced out here once. My fingers went numb before my pride did.",
+        "Wizard's Folly. If I complain about the cold, pretend you did not hear it.",
+    ],
+    "foible's fair": [
+        "Foible's Fair. Small, but I know it.",
+        "Foible's Fair. Tiny place, but it has its uses.",
+        "This little stop always feels like the road is deciding for us.",
+    ],
+    "the catacombs": [
+        "The Catacombs. Lovely. Dark, damp, and full of bad ideas.",
+        "Catacombs again. Stay close, and do not touch anything dramatic.",
+        "I hate how sound carries down here. Useful, but creepy.",
+    ],
+    "fort ranik": [
+        "Fort Ranik. Soldiers, posture, and everyone pretending not to stare.",
+        "Ranik feels stiff. Useful, but stiff.",
+        "Fort Ranik. If anyone asks, I was already standing properly.",
+    ],
+}
+
+
+def map_comment_variants(event: TelemetryEvent) -> list[str]:
+    map_name = map_display_name(event).lower()
+    for name, variants in MAP_COMMENT_VARIANTS.items():
+        if name in map_name:
+            return variants
+    label = map_display_name(event)
+    if label:
+        return [f"{label}. Let’s get our bearings.", f"{label}. New ground, then. Stay with me."]
+    return ["Give me a moment to get my bearings."]
+
+
+def rotating_map_comment(event: TelemetryEvent) -> str:
+    variants = map_comment_variants(event)
+    if len(variants) <= 1:
+        return variants[0] if variants else "Give me a moment to get my bearings."
+    key = (event.persona.strip().lower() or "unknown", event.session_id or settings.active_session, event.map_id)
+    start = map_comment_variant_by_session.get(key, 0) % len(variants)
+    ordered = variants[start:] + variants[:start]
+    choice = first_fresh_reply(ordered)
+    selected_index = variants.index(choice) if choice in variants else start
+    map_comment_variant_by_session[key] = selected_index + 1
+    return choice
+
+
 def build_character_reply_prompt(event: TelemetryEvent) -> str:
     if event.event_type == "player_chat" and event.channel == "party":
         task = "Reply directly to the player's latest party chat."
@@ -932,6 +1031,13 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         name = readable_game_text(getattr(event, "agent_name", ""))
         task = "React briefly because a party member recovered."
         context_block = f"Party recovery event: {event.message!r}\nRecovered party member: {name or 'unknown'}\n"
+    elif is_npc_dialogue_event(event):
+        task = "React to nearby NPC or on-screen dialogue as Azele, like party banter."
+        context_block = (
+            f"NPC/on-screen dialogue heard: {event.message!r}\n"
+            "Azele can mutter back, comment to the player, or lightly answer the NPC. "
+            "Do not pretend the NPC is waiting for a full conversation unless the line directly addresses the party.\n"
+        )
     elif event.event_type == "active_quest_changed":
         quest = readable_game_text(event.active_quest_name)
         task = "Make a brief, useful comment about the newly active quest."
@@ -990,6 +1096,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- If the answer is game-mechanical, give the practical answer briefly while staying in character.\n"
         "- If the player suggests an action, respond to that action.\n"
         "- If the player points something out, react to that thing.\n"
+        "- If an NPC or on-screen dialogue line appears, Azele may respond as if she heard it: a brief aside, a muttered answer, or a quick comment to the player.\n"
+        "- Do not over-answer NPC dialogue; make it feel like natural party banter in the moment.\n"
         "- Do not contradict the player's message unless clearly impossible.\n"
         "- Do not invent a different location, target, or situation.\n"
         "- If the player suggests hunting, killing, or fighting Charr, Azele should treat that as defending Ascalon from a real enemy threat.\n"
@@ -1048,6 +1156,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Player: 'of course you are' -> 'Yeah. You know me. Keep up.'\n"
         "Event: party_member_down -> 'Someone's down. Move, I can cover.'\n"
         "Event: under_attack -> 'Ow. I’m getting hit. Help me out.'\n"
+        "NPC: 'The Charr have been seen near the Wall.' -> 'See? Not just me being dramatic. We should be ready.'\n"
         "Event: entering Lakeside County -> 'Lakeside again. I used to run through here when I was younger.'\n"
         "Player: 'more of what?' -> 'Fair. I made that sound mysterious by accident.'\n\n"
         f"Event summary: type={event.event_type!r}, channel={event.channel!r}, sender={event.sender!r}, message={event.message!r}\n\n"
@@ -1210,11 +1319,13 @@ def replies_from_decision(
 def should_use_direct_character_reply(event: TelemetryEvent) -> bool:
     if event.event_type == "player_chat" and event.channel == "party":
         return True
+    if is_npc_dialogue_event(event):
+        return True
     return False
 
 
 def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
-    return event.event_type == "player_chat" and event.channel == "party"
+    return (event.event_type == "player_chat" and event.channel == "party") or is_npc_dialogue_event(event)
 
 
 def should_consider_speaking_for_event(event: TelemetryEvent) -> bool:
@@ -1228,7 +1339,9 @@ def should_consider_speaking_for_event(event: TelemetryEvent) -> bool:
         return bool(readable_game_text(getattr(event, "agent_name", "")) or has_visible_enemy_context(event))
     if event.event_type in PROACTIVE_EVENT_TYPES:
         return True
-    if event.event_type == "chat_log" and NOTABLE_CHAT_PATTERNS.search(event.message or ""):
+    if event.event_type == "chat_log" and (
+        NOTABLE_CHAT_PATTERNS.search(event.message or "") or is_npc_dialogue_event(event)
+    ):
         return True
     return False
 
@@ -1381,6 +1494,41 @@ def azele_charr_intent_reply(event: TelemetryEvent) -> str | None:
     return None
 
 
+def azele_npc_dialogue_reply(event: TelemetryEvent) -> str:
+    message = readable_game_text(event.message).lower()
+    if "charr" in message:
+        return first_fresh_reply(
+            [
+                "See? Not just me being dramatic. We should be ready.",
+                "If Charr are involved, I’m listening. Keep your eyes open.",
+                "That sounds like our problem soon enough.",
+            ]
+        )
+    if any(word in message for word in ("help", "please", "trouble", "danger")):
+        return first_fresh_reply(
+            [
+                "That sounds like someone needs something. Your call.",
+                "I heard that too. We should at least look.",
+                "Trouble, then. Because of course.",
+            ]
+        )
+    if any(word in message for word in ("reward", "gold", "payment", "coin")):
+        return first_fresh_reply(
+            [
+                "Reward, did they say? Now I’m listening.",
+                "Finally, someone speaking practically.",
+                "If there’s pay involved, I’m suddenly very attentive.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "I heard that. Not sure I like the sound of it.",
+            "Well, that sounded important. Maybe.",
+            "Did you catch that too, or am I being nosy?",
+        ]
+    )
+
+
 def ollama_generate_visible(prompt: str) -> str:
     url = settings.ollama_host.rstrip("/") + "/api/generate"
     payload = {
@@ -1486,6 +1634,13 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
             urgency="NORMAL",
             response=clamp_gw_chat_line(response),
         )
+    if is_npc_dialogue_event(event):
+        return HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="LOW",
+            response=clamp_gw_chat_line(azele_npc_dialogue_reply(event)),
+        )
     if event.event_type == "party_member_down":
         name = readable_game_text(getattr(event, "agent_name", ""))
         response = f"{name} is down. Move, I can cover." if name else "Someone's down. Move, I can cover."
@@ -1543,26 +1698,7 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
             )
         return HermesDecision(should_speak=False)
     if event.event_type in MAP_COMMENT_EVENT_TYPES:
-        map_name = map_display_name(event)
-        lowered = map_name.lower()
-        if "lakeside county" in lowered:
-            response = "Lakeside County. I know these roads pretty well."
-        elif "ascalon city" in lowered:
-            response = "Ascalon City. Good, we can breathe for a minute."
-        elif "ashford abbey" in lowered:
-            response = "Ashford Abbey. Quiet, at least for now."
-        elif "regent valley" in lowered:
-            response = "Regent Valley. Open roads, so keep an eye out."
-        elif "northlands" in lowered:
-            response = "Past the Wall. Stay close."
-        elif "wizard's folly" in lowered:
-            response = "Wizard's Folly. Cold enough to be annoying."
-        elif "foible's fair" in lowered:
-            response = "Foible's Fair. Small, but I know it."
-        elif map_name:
-            response = f"{map_name}. Let’s get our bearings."
-        else:
-            response = "Give me a moment to get my bearings."
+        response = rotating_map_comment(event)
         return HermesDecision(
             should_speak=True,
             channel_override="CHANNEL_PARTY",
@@ -1903,7 +2039,11 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
             record_memory_event(event, record_id=record_id)
             return []
         if is_map_entry:
-            map_comment_key = (event.persona.strip().lower() or "unknown", "map-entry")
+            map_comment_key = (
+                event.persona.strip().lower() or "unknown",
+                event.session_id or settings.active_session,
+                "map-entry",
+            )
             has_map_name = bool(map_display_name(event))
             if last_map_comment_by_session.get(map_comment_key) == event.map_id:
                 should_speak_now = False
@@ -1922,6 +2062,8 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
             required_cooldown = 5.0
         elif event.event_type == "target_changed":
             required_cooldown = 6.0
+        elif is_npc_dialogue_event(event):
+            required_cooldown = 14.0
         else:
             required_cooldown = settings.hermes_min_speak_seconds
         if not is_map_entry and not is_direct_player_chat and not world_state.can_speak(required_cooldown):
