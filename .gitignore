@@ -1,0 +1,28 @@
+.venv*/
+__pycache__/
+*.py[cod]
+
+# Local backend secrets and runtime logs
+backend/.env
+backend/logs/
+*.log
+
+# Native build outputs
+bin/
+build/
+build-*/
+out/
+.vs/
+*.dll
+*.exe
+*.exp
+*.ilk
+*.lib
+*.obj
+*.pdb
+
+# Editor/OS noise
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,1441 @@
+#include "PlaymatePlugin.h"
+
+#include <GWCA/Constants/Constants.h>
+#include <GWCA/Context/CharContext.h>
+#include <GWCA/GameEntities/Agent.h>
+#include <GWCA/GameContainers/Array.h>
+#include <GWCA/GameEntities/Map.h>
+#include <GWCA/GameEntities/Quest.h>
+#include <GWCA/Managers/AgentMgr.h>
+#include <GWCA/Managers/ChatMgr.h>
+#include <GWCA/Managers/GameThreadMgr.h>
+#include <GWCA/Managers/MapMgr.h>
+#include <GWCA/Managers/PartyMgr.h>
+#include <GWCA/Managers/QuestMgr.h>
+#include <GWCA/Managers/StoCMgr.h>
+#include <GWCA/GameEntities/Party.h>
+#include <GWCA/Packets/StoC.h>
+
+#include <HttpClient.h>
+#include <glaze/glaze.hpp>
+#include <imgui.h>
+#include <windows.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cctype>
+#include <cstdio>
+#include <cstring>
+#include <cwchar>
+#include <fstream>
+#include <format>
+#include <cmath>
+#include <limits>
+#include <optional>
+#include <sstream>
+#include <string_view>
+#include <utility>
+
+namespace {
+    PlaymatePlugin* active_plugin = nullptr;
+
+    std::string WideToUtf8(const wchar_t* value)
+    {
+        if (!value || !*value) {
+            return {};
+        }
+        const int len = WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
+        if (len <= 1) {
+            return {};
+        }
+        std::string out;
+        out.resize(static_cast<size_t>(len - 1));
+        WideCharToMultiByte(CP_UTF8, 0, value, -1, out.data(), len, nullptr, nullptr);
+        return out;
+    }
+
+    std::wstring Utf8ToWide(const std::string& value)
+    {
+        if (value.empty()) {
+            return {};
+        }
+        const int len = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0);
+        if (len <= 0) {
+            return {};
+        }
+        std::wstring out;
+        out.resize(static_cast<size_t>(len));
+        MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), out.data(), len);
+        return out;
+    }
+
+    std::string ChannelName(const GW::Chat::Channel channel)
+    {
+        switch (channel) {
+            case GW::Chat::CHANNEL_ALLIANCE: return "alliance";
+            case GW::Chat::CHANNEL_ALLIES: return "allies";
+            case GW::Chat::CHANNEL_ALL: return "local";
+            case GW::Chat::CHANNEL_EMOTE: return "emote";
+            case GW::Chat::CHANNEL_WARNING: return "warning";
+            case GW::Chat::CHANNEL_GUILD: return "guild";
+            case GW::Chat::CHANNEL_GLOBAL: return "global";
+            case GW::Chat::CHANNEL_GROUP: return "party";
+            case GW::Chat::CHANNEL_TRADE: return "trade";
+            case GW::Chat::CHANNEL_ADVISORY: return "system";
+            case GW::Chat::CHANNEL_WHISPER: return "whisper";
+            case GW::Chat::CHANNEL_COMMAND: return "command";
+            default: return "unknown";
+        }
+    }
+
+    std::string TrimTrailingSlash(std::string value)
+    {
+        while (!value.empty() && value.back() == '/') {
+            value.pop_back();
+        }
+        return value;
+    }
+
+    std::string PlayerMessageText(const wchar_t* raw)
+    {
+        if (!raw || !*raw) {
+            return {};
+        }
+        const auto channel = GW::Chat::GetChannel(*raw);
+        if (channel != GW::Chat::CHANNEL_UNKNOW) {
+            return WideToUtf8(raw + 1);
+        }
+        return WideToUtf8(raw);
+    }
+
+    bool IsAllowedChatLogChannel(const GW::Chat::Channel channel)
+    {
+        switch (channel) {
+            case GW::Chat::CHANNEL_ALL:
+            case GW::Chat::CHANNEL_EMOTE:
+            case GW::Chat::CHANNEL_GUILD:
+            case GW::Chat::CHANNEL_ALLIANCE:
+            case GW::Chat::CHANNEL_WHISPER:
+            case GW::Chat::CHANNEL_ADVISORY:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool LooksGwEncoded(const wchar_t* message)
+    {
+        if (!message || !*message) {
+            return true;
+        }
+
+        size_t total = 0;
+        size_t encoded = 0;
+        for (const wchar_t* cursor = message; *cursor; ++cursor) {
+            ++total;
+            const wchar_t ch = *cursor;
+            if ((ch < 0x20 && ch != L'\t' && ch != L'\n' && ch != L'\r') || ch > 0xFF) {
+                ++encoded;
+            }
+        }
+        return total == 0 || message[0] < 0x20 || message[0] > 0xFF || encoded * 4 > total;
+    }
+
+    std::string StripGwMarkup(std::string text)
+    {
+        std::string out;
+        out.reserve(text.size());
+        bool in_tag = false;
+        for (const char ch : text) {
+            if (ch == '<') {
+                in_tag = true;
+                continue;
+            }
+            if (ch == '>' && in_tag) {
+                in_tag = false;
+                continue;
+            }
+            if (in_tag || static_cast<unsigned char>(ch) < 0x20) {
+                continue;
+            }
+            out.push_back(ch);
+        }
+
+        std::istringstream stream(out);
+        std::ostringstream collapsed;
+        std::string word;
+        while (stream >> word) {
+            if (collapsed.tellp() > 0) {
+                collapsed << ' ';
+            }
+            collapsed << word;
+        }
+        return collapsed.str();
+    }
+
+    bool ContainsInsensitive(const std::string& haystack, const std::string& needle)
+    {
+        return std::search(
+                   haystack.begin(),
+                   haystack.end(),
+                   needle.begin(),
+                   needle.end(),
+                   [](const char a, const char b) {
+                       return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+                   })
+            != haystack.end();
+    }
+
+    bool IsMeaningfulSystemLine(const std::string& message)
+    {
+        static constexpr std::string_view keywords[] = {
+            "quest",
+            "mission",
+            "objective",
+            "completed",
+            "accepted",
+            "updated",
+            "reward",
+            "sold",
+            "bought",
+            "received",
+            "acquired",
+            "gold",
+            "item",
+            "inventory",
+        };
+        return std::ranges::any_of(keywords, [&](const std::string_view keyword) {
+            return ContainsInsensitive(message, std::string(keyword));
+        });
+    }
+
+    bool IsReadableChatText(const std::string& message)
+    {
+        if (message.size() < 3) {
+            return false;
+        }
+        if (ContainsInsensitive(message, "GWToolbox++") || ContainsInsensitive(message, "Plugins detected")
+            || ContainsInsensitive(message, "Plugins are NOT permitted")) {
+            return false;
+        }
+
+        size_t letters = 0;
+        size_t readable = 0;
+        for (const unsigned char ch : message) {
+            if (std::isalpha(ch)) {
+                ++letters;
+            }
+            if (std::isalnum(ch) || std::ispunct(ch) || std::isspace(ch)) {
+                ++readable;
+            }
+        }
+        return letters >= 2 && readable * 10 >= message.size() * 9;
+    }
+
+    std::optional<std::string> FilterChatLogMessage(const GW::Chat::Channel channel, const wchar_t* message)
+    {
+        if (!IsAllowedChatLogChannel(channel) || LooksGwEncoded(message)) {
+            return std::nullopt;
+        }
+
+        auto cleaned = StripGwMarkup(WideToUtf8(message));
+        if (!IsReadableChatText(cleaned)) {
+            return std::nullopt;
+        }
+        if (channel == GW::Chat::CHANNEL_ADVISORY && !IsMeaningfulSystemLine(cleaned)) {
+            return std::nullopt;
+        }
+        return cleaned;
+    }
+
+    std::string CurrentUtcTimestamp()
+    {
+        SYSTEMTIME now;
+        GetSystemTime(&now);
+        return std::format(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+            now.wYear,
+            now.wMonth,
+            now.wDay,
+            now.wHour,
+            now.wMinute,
+            now.wSecond,
+            now.wMilliseconds);
+    }
+
+    std::wstring CurrentLocalLogDate()
+    {
+        SYSTEMTIME now;
+        GetLocalTime(&now);
+        return std::format(L"{:04}-{:02}-{:02}", now.wYear, now.wMonth, now.wDay);
+    }
+
+    uint64_t MonotonicMs()
+    {
+        return GetTickCount64();
+    }
+
+    float Distance2D(const GW::GamePos& a, const GW::GamePos& b)
+    {
+        const float dx = a.x - b.x;
+        const float dy = a.y - b.y;
+        return std::sqrt(dx * dx + dy * dy);
+    }
+
+    bool IsAgentInCurrentParty(const uint32_t agent_id)
+    {
+        if (!agent_id) {
+            return false;
+        }
+        if (const GW::AgentLiving* player = GW::Agents::GetControlledCharacter(); player && player->agent_id == agent_id) {
+            return true;
+        }
+        const GW::PartyInfo* party = GW::PartyMgr::GetPartyInfo();
+        if (!party) {
+            return false;
+        }
+        for (const GW::HeroPartyMember& hero : party->heroes) {
+            if (hero.agent_id == agent_id) {
+                return true;
+            }
+        }
+        for (const GW::HenchmanPartyMember& henchman : party->henchmen) {
+            if (henchman.agent_id == agent_id) {
+                return true;
+            }
+        }
+        for (const GW::AgentID other : party->others) {
+            if (other == agent_id) {
+                return true;
+            }
+        }
+        for (const GW::PlayerPartyMember& player : party->players) {
+            if (GW::Agents::GetAgentIdByLoginNumber(player.login_number) == agent_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::string PartyAgentName(const uint32_t agent_id)
+    {
+        const GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+        const GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
+        if (living && living->login_number) {
+            return WideToUtf8(GW::Agents::GetPlayerNameByLoginNumber(living->login_number));
+        }
+        return {};
+    }
+
+    bool IsReplyTriggerEvent(const std::string& event_type)
+    {
+        static constexpr std::string_view triggers[] = {
+            "player_chat",
+            "environment_alert",
+            "party_member_down",
+            "party_defeated",
+            "mission_objective_completed",
+            "vanquish_complete",
+        };
+        return std::ranges::any_of(triggers, [&](const std::string_view trigger) {
+            return event_type == trigger;
+        });
+    }
+
+    const char* AgeText(const uint64_t timestamp_ms, char* buffer, const size_t buffer_size)
+    {
+        if (!timestamp_ms) {
+            strncpy_s(buffer, buffer_size, "never", _TRUNCATE);
+            return buffer;
+        }
+        const auto age_ms = MonotonicMs() - timestamp_ms;
+        if (age_ms < 1000) {
+            strncpy_s(buffer, buffer_size, "now", _TRUNCATE);
+            return buffer;
+        }
+        snprintf(buffer, buffer_size, "%.1fs ago", static_cast<double>(age_ms) / 1000.0);
+        return buffer;
+    }
+
+    std::wstring SpeechBubbleMessage(const std::wstring& reply)
+    {
+        constexpr size_t max_visible_chars = 110;
+        std::wstring cleaned;
+        cleaned.reserve(std::min(reply.size(), max_visible_chars));
+        for (const wchar_t ch : reply) {
+            if (ch == L'\r' || ch == L'\n' || ch == L'\t') {
+                cleaned.push_back(L' ');
+            }
+            else if (ch >= 0x20) {
+                cleaned.push_back(ch);
+            }
+            if (cleaned.size() >= max_visible_chars) {
+                break;
+            }
+        }
+
+        while (!cleaned.empty() && cleaned.back() == L' ') {
+            cleaned.pop_back();
+        }
+        if (cleaned.empty()) {
+            return {};
+        }
+
+        return std::format(L"\x108\x107{}\x1", cleaned);
+    }
+}
+
+DLLAPI ToolboxPlugin* ToolboxPluginInstance()
+{
+    static PlaymatePlugin instance;
+    return &instance;
+}
+
+PlaymatePlugin::PlaymatePlugin()
+{
+    ApplyConfig();
+}
+
+PlaymatePlugin::~PlaymatePlugin()
+{
+    StopWorker();
+}
+
+void PlaymatePlugin::Initialize(ImGuiContext* ctx, const ImGuiAllocFns allocator_fns, const HMODULE toolbox_dll)
+{
+    ToolboxUIPlugin::Initialize(ctx, allocator_fns, toolbox_dll);
+    active_plugin = this;
+    InitHttpClient();
+    RegisterHooks();
+    StartWorker();
+    QueueSnapshotEvent("plugin_started");
+}
+
+void PlaymatePlugin::SignalTerminate()
+{
+    RemoveHooks();
+    StopWorker();
+    ToolboxUIPlugin::SignalTerminate();
+}
+
+void PlaymatePlugin::Terminate()
+{
+    RemoveHooks();
+    StopWorker();
+    ShutdownHttpClient();
+    if (active_plugin == this) {
+        active_plugin = nullptr;
+    }
+    ToolboxUIPlugin::Terminate();
+}
+
+bool PlaymatePlugin::CanTerminate()
+{
+    return !worker_.joinable();
+}
+
+void PlaymatePlugin::LoadSettings(const wchar_t* folder)
+{
+    ToolboxUIPlugin::LoadSettings(folder);
+    std::string backend_url = backend_url_input_;
+    std::string api_token = api_token_input_;
+    LoadSetting("enabled", enabled_);
+    LoadSetting("local_capture", local_capture_);
+    LoadSetting("send_to_backend", send_to_backend_);
+    LoadSetting("inject_replies", inject_replies_);
+    LoadSetting("show_speech_bubbles", show_speech_bubbles_);
+    LoadSetting("environment_radar", environment_radar_);
+    LoadSetting("backend_url", backend_url);
+    LoadSetting("api_token", api_token);
+    LoadSetting("poll_interval_sec", poll_interval_sec_);
+    LoadSetting("snapshot_interval_sec", snapshot_interval_sec_);
+    LoadSetting("radar_interval_sec", radar_interval_sec_);
+
+    strncpy_s(backend_url_input_, backend_url.c_str(), _TRUNCATE);
+    strncpy_s(api_token_input_, api_token.c_str(), _TRUNCATE);
+    {
+        std::lock_guard lock(config_mutex_);
+        const std::filesystem::path plugin_folder = folder;
+        const auto computer_folder = plugin_folder.parent_path();
+        local_log_folder_ = (computer_folder.empty() ? plugin_folder : computer_folder) / L"Playmate";
+    }
+    poll_interval_sec_ = std::clamp(poll_interval_sec_, 0.25f, 30.0f);
+    snapshot_interval_sec_ = std::clamp(snapshot_interval_sec_, 1.0f, 120.0f);
+    radar_interval_sec_ = std::clamp(radar_interval_sec_, 2.0f, 30.0f);
+    ApplyConfig();
+}
+
+void PlaymatePlugin::SaveSettings(const wchar_t* folder)
+{
+    SaveSetting("enabled", enabled_);
+    SaveSetting("local_capture", local_capture_);
+    SaveSetting("send_to_backend", send_to_backend_);
+    SaveSetting("inject_replies", inject_replies_);
+    SaveSetting("show_speech_bubbles", show_speech_bubbles_);
+    SaveSetting("environment_radar", environment_radar_);
+    SaveSetting("backend_url", std::string(backend_url_input_));
+    SaveSetting("api_token", std::string(api_token_input_));
+    SaveSetting("poll_interval_sec", poll_interval_sec_);
+    SaveSetting("snapshot_interval_sec", snapshot_interval_sec_);
+    SaveSetting("radar_interval_sec", radar_interval_sec_);
+    ToolboxUIPlugin::SaveSettings(folder);
+}
+
+void PlaymatePlugin::DrawSettings()
+{
+    bool config_changed = false;
+    config_changed |= ImGui::Checkbox("Enable telemetry", &enabled_);
+    config_changed |= ImGui::Checkbox("Write local JSONL capture", &local_capture_);
+    config_changed |= ImGui::Checkbox("Send telemetry to backend", &send_to_backend_);
+    config_changed |= ImGui::Checkbox("Inject companion replies into party chat", &inject_replies_);
+    config_changed |= ImGui::Checkbox("Show companion speech bubbles", &show_speech_bubbles_);
+    config_changed |= ImGui::Checkbox("Enable environment radar", &environment_radar_);
+    config_changed |= ImGui::InputText("Local backend URL", backend_url_input_, sizeof(backend_url_input_));
+    config_changed |= ImGui::InputText("Local API token", api_token_input_, sizeof(api_token_input_), ImGuiInputTextFlags_Password);
+    config_changed |= ImGui::SliderFloat("Reply poll interval", &poll_interval_sec_, 0.25f, 10.0f, "%.2fs");
+    config_changed |= ImGui::SliderFloat("Snapshot interval", &snapshot_interval_sec_, 1.0f, 60.0f, "%.0fs");
+    config_changed |= ImGui::SliderFloat("Radar interval", &radar_interval_sec_, 2.0f, 15.0f, "%.1fs");
+    if (config_changed) {
+        ApplyConfig();
+    }
+
+    std::lock_guard lock(status_mutex_);
+    ImGui::Separator();
+    ImGui::Text("Status: %s", status_.c_str());
+    ImGui::TextWrapped("Last event: %s", last_event_status_.c_str());
+    if (waiting_for_reply_) {
+        char age[32] = {};
+        ImGui::Text("Companion: waiting for reply (%s)", AgeText(waiting_since_ms_, age, sizeof(age)));
+    }
+    else {
+        ImGui::Text("Companion: idle");
+    }
+    ImGui::TextWrapped("Last reply: %s", last_reply_status_.c_str());
+    if (!last_backend_error_.empty()) {
+        ImGui::TextWrapped("Last backend error: %s", last_backend_error_.c_str());
+    }
+    const auto persona = CurrentPersonaName();
+    ImGui::Text("Persona: %s", persona.c_str());
+    const auto log_path = WideToUtf8(LocalLogPath().wstring().c_str());
+    ImGui::TextWrapped("Local log: %s", log_path.c_str());
+    ImGui::Text("Local: %zu", local_written_count_);
+    ImGui::SameLine();
+    ImGui::Text("Sent: %zu", sent_count_);
+    ImGui::SameLine();
+    ImGui::Text("Failed: %zu", failed_count_);
+    ImGui::SameLine();
+    ImGui::Text("Replies: %zu", received_count_);
+}
+
+void PlaymatePlugin::Draw(IDirect3DDevice9*)
+{
+    if (!GetVisiblePtr() || !*GetVisiblePtr()) {
+        return;
+    }
+    if (ImGui::Begin(Name(), GetVisiblePtr(), GetWinFlags())) {
+        DrawSettings();
+    }
+    ImGui::End();
+}
+
+void PlaymatePlugin::Update(const float delta_ms)
+{
+    FlushRepliesToChat();
+
+    if (!enabled_) {
+        return;
+    }
+
+    snapshot_elapsed_ms_ += delta_ms;
+    radar_elapsed_ms_ += delta_ms;
+    const Snapshot snapshot = BuildSnapshot();
+    const bool map_changed = snapshot.map_id != 0 && snapshot.map_id != last_map_id_;
+    const bool quest_changed = snapshot.active_quest_id != last_active_quest_id_;
+    const bool interval_elapsed = snapshot_elapsed_ms_ >= snapshot_interval_sec_ * 1000.0f;
+    if (map_changed || quest_changed || interval_elapsed) {
+        QueueSnapshotEvent(map_changed ? "map_changed" : quest_changed ? "active_quest_changed" : "snapshot");
+        snapshot_elapsed_ms_ = 0.0f;
+        last_map_id_ = snapshot.map_id;
+        last_active_quest_id_ = snapshot.active_quest_id;
+    }
+    if (radar_elapsed_ms_ >= radar_interval_sec_ * 1000.0f) {
+        radar_elapsed_ms_ = 0.0f;
+        MaybeQueueEnvironmentAlert();
+    }
+}
+
+void PlaymatePlugin::RegisterHooks()
+{
+    GW::UI::RegisterUIMessageCallback(&send_chat_entry_, GW::UI::UIMessage::kSendChatMessage, OnSendChat, 0x8000);
+    GW::UI::RegisterUIMessageCallback(&write_chat_entry_, GW::UI::UIMessage::kWriteToChatLog, OnWriteToChatLog, 0x8000);
+    GW::UI::RegisterUIMessageCallback(&world_event_entry_, GW::UI::UIMessage::kMapLoaded, OnMapOrQuestEvent, 0x8000);
+    GW::UI::RegisterUIMessageCallback(&world_event_entry_, GW::UI::UIMessage::kMapChange, OnMapOrQuestEvent, 0x8000);
+    GW::UI::RegisterUIMessageCallback(&world_event_entry_, GW::UI::UIMessage::kQuestAdded, OnMapOrQuestEvent, 0x8000);
+    GW::UI::RegisterUIMessageCallback(&world_event_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnMapOrQuestEvent, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentState>(&stoc_event_entry_, OnAgentState, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::PartyDefeated>(&stoc_event_entry_, OnPartyDefeated, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::ObjectiveAdd>(&stoc_event_entry_, OnObjectiveAdd, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::ObjectiveDone>(&stoc_event_entry_, OnObjectiveDone, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::ObjectiveUpdateName>(&stoc_event_entry_, OnObjectiveUpdateName, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::CreateMissionProgress>(&stoc_event_entry_, OnCreateMissionProgress, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::UpdateMissionProgress>(&stoc_event_entry_, OnUpdateMissionProgress, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::VanquishProgress>(&stoc_event_entry_, OnVanquishProgress, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::VanquishComplete>(&stoc_event_entry_, OnVanquishComplete, 0x8000);
+}
+
+void PlaymatePlugin::RemoveHooks()
+{
+    GW::UI::RemoveUIMessageCallback(&send_chat_entry_);
+    GW::UI::RemoveUIMessageCallback(&write_chat_entry_);
+    GW::UI::RemoveUIMessageCallback(&world_event_entry_);
+    GW::StoC::RemoveCallbacks(&stoc_event_entry_);
+}
+
+void PlaymatePlugin::StartWorker()
+{
+    if (running_.exchange(true)) {
+        return;
+    }
+    worker_ = std::thread(&PlaymatePlugin::WorkerLoop, this);
+}
+
+void PlaymatePlugin::StopWorker()
+{
+    if (!running_.exchange(false)) {
+        return;
+    }
+    queue_cv_.notify_all();
+    if (worker_.joinable()) {
+        worker_.join();
+    }
+}
+
+void PlaymatePlugin::WorkerLoop()
+{
+    auto next_poll = std::chrono::steady_clock::now();
+    while (running_) {
+        TelemetryEvent event;
+        bool has_event = false;
+        {
+            std::unique_lock lock(queue_mutex_);
+            queue_cv_.wait_until(lock, next_poll, [&] { return !running_ || !outbound_.empty(); });
+            if (!running_) {
+                break;
+            }
+            if (!outbound_.empty()) {
+                event = std::move(outbound_.front());
+                outbound_.pop_front();
+                has_event = true;
+            }
+        }
+
+        if (has_event) {
+            bool wrote_local = false;
+            bool posted_remote = false;
+            bool failed = false;
+
+            if (local_capture_enabled_.load()) {
+                wrote_local = WriteTelemetryLocal(event);
+                failed = failed || !wrote_local;
+            }
+
+            if (backend_enabled_.load()) {
+                posted_remote = PostTelemetry(event);
+                failed = failed || !posted_remote;
+            }
+
+            std::lock_guard lock(status_mutex_);
+            if (wrote_local) {
+                ++local_written_count_;
+            }
+            if (posted_remote) {
+                ++sent_count_;
+                last_sent_ms_ = MonotonicMs();
+                last_backend_error_.clear();
+                last_event_status_ = std::format("{} accepted by bridge", event.event_type);
+                if (IsReplyTriggerEvent(event.event_type)) {
+                    waiting_for_reply_ = true;
+                    waiting_since_ms_ = last_sent_ms_;
+                    last_reply_status_ = "Waiting for Hermes";
+                }
+            }
+            if (failed) {
+                ++failed_count_;
+                last_event_status_ = std::format("{} failed", event.event_type);
+                if (wrote_local) {
+                    status_ = "Captured locally; backend failed";
+                }
+            }
+            else {
+                status_ = posted_remote ? "Captured and sent" : "Captured locally";
+            }
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_poll) {
+            PollReplies();
+            next_poll = now + std::chrono::milliseconds(poll_interval_ms_.load());
+        }
+    }
+}
+
+bool PlaymatePlugin::WriteTelemetryLocal(const TelemetryEvent& event)
+{
+    const auto path = LocalLogPath();
+    if (path.empty()) {
+        SetStatus("Local log path is empty");
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (ec) {
+        SetStatus("Failed to create local log folder");
+        return false;
+    }
+
+    std::ofstream out(path, std::ios::app | std::ios::binary);
+    if (!out) {
+        SetStatus("Failed to open local telemetry log");
+        return false;
+    }
+
+    out << glz::write_json(event).value_or(std::string{}) << '\n';
+    return out.good();
+}
+
+bool PlaymatePlugin::PostTelemetry(const TelemetryEvent& event)
+{
+    const auto [backend_url, token] = GetConfig();
+    if (backend_url.empty()) {
+        SetStatus("Backend URL is empty");
+        return false;
+    }
+
+    HttpRequest request;
+    request.SetUrl(EventsUrl().c_str());
+    request.SetMethod(HttpMethod::Post);
+    request.SetUserAgent("GWToolbox++ Playmate");
+    request.SetTimeoutMs(1500);
+    request.SetConnectTimeoutMs(750);
+    request.SetHeader("Content-Type", "application/json");
+    if (!token.empty()) {
+        request.SetHeader("Authorization", ("Bearer " + token).c_str());
+    }
+
+    const auto json = glz::write_json(event).value_or(std::string{});
+    request.SetPostContent(json, ContentFlag::Copy);
+    const bool ok = request.Perform() && request.GetStatusCode() >= 200 && request.GetStatusCode() < 300;
+    if (!ok) {
+        const auto error = std::format("POST failed: {} HTTP {}", request.GetStatusStr(), request.GetStatusCode());
+        {
+            std::lock_guard lock(status_mutex_);
+            last_backend_error_ = error;
+        }
+        SetStatus(error);
+    }
+    return ok;
+}
+
+void PlaymatePlugin::PollReplies()
+{
+    if (!telemetry_enabled_.load() || !backend_enabled_.load() || !reply_injection_enabled_.load()) {
+        return;
+    }
+
+    const auto [backend_url, token] = GetConfig();
+    if (backend_url.empty()) {
+        return;
+    }
+
+    HttpRequest request;
+    request.SetUrl(RepliesUrl().c_str());
+    request.SetMethod(HttpMethod::Get);
+    request.SetUserAgent("GWToolbox++ Playmate");
+    request.SetTimeoutMs(1200);
+    request.SetConnectTimeoutMs(500);
+    if (!token.empty()) {
+        request.SetHeader("Authorization", ("Bearer " + token).c_str());
+    }
+
+    if (!(request.Perform() && request.GetStatusCode() >= 200 && request.GetStatusCode() < 300)) {
+        return;
+    }
+
+    auto& content = request.GetContent();
+    if (content.empty()) {
+        return;
+    }
+
+    RepliesResponse parsed;
+    if (auto ec = glz::read_json(parsed, content); !ec) {
+        for (const auto& reply : parsed.replies) {
+            if (!reply.empty()) {
+                QueueReply(Utf8ToWide(reply));
+            }
+        }
+        return;
+    }
+
+    QueueReply(Utf8ToWide(content));
+}
+
+void PlaymatePlugin::QueueTelemetry(std::string event_type, std::string sender, std::string channel, std::string message)
+{
+    if (!telemetry_enabled_.load() || (!local_capture_enabled_.load() && !backend_enabled_.load()) || message.empty()) {
+        return;
+    }
+    if (channel == "trade") {
+        return;
+    }
+
+    const Snapshot snapshot = BuildSnapshot();
+    TelemetryEvent event;
+    event.persona = CurrentPersonaName();
+    event.client_time = CurrentUtcTimestamp();
+    event.event_type = std::move(event_type);
+    event.sender = std::move(sender);
+    event.channel = std::move(channel);
+    event.message = std::move(message);
+    event.map_id = snapshot.map_id;
+    event.map_name = snapshot.map_name;
+    event.instance_type = snapshot.instance_type;
+    event.district = snapshot.district;
+    event.instance_time = snapshot.instance_time;
+    event.active_quest_id = snapshot.active_quest_id;
+    event.quest_count = snapshot.quest_count;
+    event.active_quest_name = snapshot.active_quest_name;
+    event.active_quest_objectives = snapshot.active_quest_objectives;
+
+    {
+        std::lock_guard lock(queue_mutex_);
+        if (outbound_.size() >= 256) {
+            outbound_.pop_front();
+        }
+        outbound_.push_back(std::move(event));
+    }
+    queue_cv_.notify_one();
+}
+
+void PlaymatePlugin::QueueEnvironmentAlert(std::string alert_type, std::string severity, std::string message, const EnvironmentScan& scan)
+{
+    if (!telemetry_enabled_.load() || (!local_capture_enabled_.load() && !backend_enabled_.load()) || message.empty()) {
+        return;
+    }
+
+    const Snapshot snapshot = BuildSnapshot();
+    TelemetryEvent event;
+    event.persona = CurrentPersonaName();
+    event.client_time = CurrentUtcTimestamp();
+    event.event_type = "environment_alert";
+    event.sender = "System";
+    event.channel = "system";
+    event.message = std::move(message);
+    event.map_id = snapshot.map_id;
+    event.map_name = snapshot.map_name;
+    event.instance_type = snapshot.instance_type;
+    event.district = snapshot.district;
+    event.instance_time = snapshot.instance_time;
+    event.active_quest_id = snapshot.active_quest_id;
+    event.quest_count = snapshot.quest_count;
+    event.active_quest_name = snapshot.active_quest_name;
+    event.active_quest_objectives = snapshot.active_quest_objectives;
+    event.player_x = scan.player_x;
+    event.player_y = scan.player_y;
+    event.player_hp = scan.player_hp;
+    event.hostile_count = scan.hostile_count;
+    event.close_hostile_count = scan.close_hostile_count;
+    event.dead_hostile_count = scan.dead_hostile_count;
+    event.closest_hostile_agent_id = scan.closest_hostile_agent_id;
+    event.closest_hostile_distance = scan.closest_hostile_distance;
+    event.alert_type = std::move(alert_type);
+    event.severity = std::move(severity);
+
+    {
+        std::lock_guard lock(queue_mutex_);
+        if (outbound_.size() >= 256) {
+            outbound_.pop_front();
+        }
+        outbound_.push_back(std::move(event));
+    }
+    queue_cv_.notify_one();
+}
+
+void PlaymatePlugin::QueueGameplayEvent(TelemetryEvent event)
+{
+    if (!telemetry_enabled_.load() || (!local_capture_enabled_.load() && !backend_enabled_.load()) || event.message.empty()) {
+        return;
+    }
+
+    const Snapshot snapshot = BuildSnapshot();
+    event.persona = CurrentPersonaName();
+    event.client_time = CurrentUtcTimestamp();
+    if (event.sender.empty()) {
+        event.sender = "System";
+    }
+    if (event.channel.empty()) {
+        event.channel = "system";
+    }
+    event.map_id = snapshot.map_id;
+    event.map_name = snapshot.map_name;
+    event.instance_type = snapshot.instance_type;
+    event.district = snapshot.district;
+    event.instance_time = snapshot.instance_time;
+    event.active_quest_id = snapshot.active_quest_id;
+    event.quest_count = snapshot.quest_count;
+    event.active_quest_name = snapshot.active_quest_name;
+    event.active_quest_objectives = snapshot.active_quest_objectives;
+
+    {
+        std::lock_guard lock(queue_mutex_);
+        if (outbound_.size() >= 256) {
+            outbound_.pop_front();
+        }
+        outbound_.push_back(std::move(event));
+    }
+    queue_cv_.notify_one();
+}
+
+void PlaymatePlugin::QueueSnapshotEvent(const char* event_type)
+{
+    QueueTelemetry(event_type, "System", "system", event_type);
+}
+
+void PlaymatePlugin::MaybeQueueEnvironmentAlert()
+{
+    if (!environment_radar_enabled_.load()) {
+        return;
+    }
+    const EnvironmentScan scan = BuildEnvironmentScan();
+    if (!scan.valid) {
+        last_hostile_count_ = 0;
+        last_close_hostile_count_ = 0;
+        last_player_hp_ = 0.0f;
+        last_in_combat_ = false;
+        return;
+    }
+
+    const bool entered_close_range = scan.close_hostile_count > 0 && last_close_hostile_count_ == 0;
+    const bool danger_spike = scan.close_hostile_count >= 3 && scan.close_hostile_count > last_close_hostile_count_;
+    const bool combat_started = scan.in_combat && !last_in_combat_;
+    const bool combat_ended = !scan.in_combat && last_in_combat_ && scan.hostile_count == 0;
+    const bool has_hp_baseline = last_player_hp_ > 0.0f;
+    const float hp_drop = has_hp_baseline ? last_player_hp_ - scan.player_hp : 0.0f;
+    const bool significant_hp_drop = hp_drop >= 0.08f;
+    const bool crossed_below_half_hp = has_hp_baseline && last_player_hp_ >= 0.50f && scan.player_hp < 0.50f;
+
+    if (significant_hp_drop || crossed_below_half_hp) {
+        QueueEnvironmentAlert(
+            "under_attack",
+            (crossed_below_half_hp || scan.player_hp < 0.35f) ? "HIGH" : "NORMAL",
+            std::format("Player is under attack. Health is at {:.0f} percent.", scan.player_hp * 100.0f),
+            scan);
+    }
+    else if (danger_spike) {
+        QueueEnvironmentAlert(
+            "danger_spike",
+            "HIGH",
+            std::format("{} hostile enemies are close.", scan.close_hostile_count),
+            scan);
+    }
+    else if (combat_started) {
+        QueueEnvironmentAlert("combat_started", "HIGH", "Combat started.", scan);
+    }
+    else if (entered_close_range) {
+        QueueEnvironmentAlert(
+            "enemy_patrol_nearby",
+            "NORMAL",
+            std::format("Enemy nearby at {:.0f} range.", scan.closest_hostile_distance),
+            scan);
+    }
+    else if (combat_ended) {
+        QueueEnvironmentAlert("combat_over", "LOW", "Combat ended.", scan);
+    }
+
+    last_hostile_count_ = scan.hostile_count;
+    last_close_hostile_count_ = scan.close_hostile_count;
+    last_player_hp_ = scan.player_hp;
+    last_in_combat_ = scan.in_combat;
+}
+
+void PlaymatePlugin::QueueReply(std::wstring reply)
+{
+    if (reply.empty()) {
+        return;
+    }
+    {
+        std::lock_guard lock(queue_mutex_);
+        inbound_replies_.push_back(std::move(reply));
+    }
+}
+
+void PlaymatePlugin::FlushRepliesToChat()
+{
+    if (!reply_injection_enabled_.load()) {
+        return;
+    }
+
+    std::deque<std::wstring> replies;
+    {
+        std::lock_guard lock(queue_mutex_);
+        replies.swap(inbound_replies_);
+    }
+    for (const auto& reply : replies) {
+        const auto persona = CurrentPersonaNameWide();
+        ShowCompanionSpeechBubble(reply);
+        GW::Chat::WriteChat(GW::Chat::CHANNEL_GROUP, reply.c_str(), persona.c_str(), true);
+        std::lock_guard lock(status_mutex_);
+        ++received_count_;
+        waiting_for_reply_ = false;
+        last_reply_ms_ = MonotonicMs();
+        last_reply_status_ = "Reply received";
+    }
+}
+
+void PlaymatePlugin::ShowCompanionSpeechBubble(const std::wstring& reply) const
+{
+    if (!speech_bubbles_enabled_.load()) {
+        return;
+    }
+
+    const std::wstring bubble = SpeechBubbleMessage(reply);
+    if (bubble.empty()) {
+        return;
+    }
+
+    GW::GameThread::Enqueue([bubble] {
+        const GW::AgentLiving* player = GW::Agents::GetControlledCharacter();
+        if (!player || !player->agent_id) {
+            return;
+        }
+
+        GW::Packet::StoC::SpeechBubble packet;
+        packet.agent_id = player->agent_id;
+        wcsncpy_s(packet.message, bubble.c_str(), _TRUNCATE);
+        GW::StoC::EmulatePacket(&packet);
+    });
+}
+
+void PlaymatePlugin::ApplyConfig()
+{
+    poll_interval_sec_ = std::clamp(poll_interval_sec_, 0.25f, 30.0f);
+    snapshot_interval_sec_ = std::clamp(snapshot_interval_sec_, 1.0f, 120.0f);
+    telemetry_enabled_.store(enabled_);
+    local_capture_enabled_.store(local_capture_);
+    backend_enabled_.store(send_to_backend_);
+    reply_injection_enabled_.store(inject_replies_);
+    speech_bubbles_enabled_.store(show_speech_bubbles_);
+    environment_radar_enabled_.store(environment_radar_);
+    poll_interval_ms_.store(static_cast<int>(poll_interval_sec_ * 1000.0f));
+    radar_interval_sec_ = std::clamp(radar_interval_sec_, 2.0f, 30.0f);
+    std::lock_guard lock(config_mutex_);
+    backend_url_ = TrimTrailingSlash(backend_url_input_);
+    api_token_ = api_token_input_;
+}
+
+void PlaymatePlugin::SetStatus(std::string status)
+{
+    std::lock_guard lock(status_mutex_);
+    status_ = std::move(status);
+}
+
+PlaymatePlugin::Snapshot PlaymatePlugin::BuildSnapshot() const
+{
+    Snapshot snapshot;
+    if (!GW::Map::GetIsMapLoaded()) {
+        return snapshot;
+    }
+
+    snapshot.map_id = static_cast<uint32_t>(GW::Map::GetMapID());
+    snapshot.map_name = MapNameForId(snapshot.map_id);
+    snapshot.instance_type = static_cast<uint32_t>(GW::Map::GetInstanceType());
+    snapshot.district = static_cast<uint32_t>(std::max(0, GW::Map::GetDistrict()));
+    snapshot.instance_time = GW::Map::GetInstanceTime();
+    snapshot.active_quest_id = static_cast<uint32_t>(GW::QuestMgr::GetActiveQuestId());
+
+    const GW::QuestLog* quest_log = GW::QuestMgr::GetQuestLog();
+    if (quest_log && quest_log->valid()) {
+        snapshot.quest_count = quest_log->size();
+    }
+
+    if (const GW::Quest* quest = GW::QuestMgr::GetActiveQuest()) {
+        snapshot.active_quest_name = WideToUtf8(quest->name);
+        snapshot.active_quest_objectives = WideToUtf8(quest->objectives);
+    }
+    return snapshot;
+}
+
+std::string PlaymatePlugin::MapNameForId(const uint32_t map_id) const
+{
+    if (!map_id) {
+        return {};
+    }
+
+    std::lock_guard lock(map_name_cache_mutex_);
+    std::unique_ptr<DecodedMapName>& entry = map_name_cache_[map_id];
+    if (!entry) {
+        entry = std::make_unique<DecodedMapName>();
+    }
+    if (entry->decoded[0]) {
+        return WideToUtf8(entry->decoded);
+    }
+    if (entry->requested) {
+        return {};
+    }
+
+    const GW::AreaInfo* area = GW::Map::GetMapInfo(static_cast<GW::Constants::MapID>(map_id));
+    if (!(area && area->name_id && GW::UI::UInt32ToEncStr(area->name_id, entry->encoded, _countof(entry->encoded)))) {
+        return {};
+    }
+
+    entry->requested = true;
+    GW::UI::AsyncDecodeStr(entry->encoded, entry->decoded, _countof(entry->decoded));
+    return {};
+}
+
+PlaymatePlugin::EnvironmentScan PlaymatePlugin::BuildEnvironmentScan() const
+{
+    EnvironmentScan scan;
+    if (!GW::Map::GetIsMapLoaded() || GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable) {
+        return scan;
+    }
+
+    GW::AgentArray* agents = GW::Agents::GetAgentArray();
+    const GW::AgentLiving* me = agents ? GW::Agents::GetControlledCharacter() : nullptr;
+    if (!agents || !me) {
+        return scan;
+    }
+
+    scan.valid = true;
+    scan.player_x = me->pos.x;
+    scan.player_y = me->pos.y;
+    scan.player_hp = me->hp;
+    scan.closest_hostile_distance = std::numeric_limits<float>::max();
+
+    for (const GW::Agent* agent : *agents) {
+        if (!agent || agent == me || !GW::Agents::GetAgentMatchesFlags(agent, GW::TargetFilter::AnyLiving)) {
+            continue;
+        }
+        const GW::AgentLiving* living = agent->GetAsAgentLiving();
+        if (!living || living->allegiance != GW::Constants::Allegiance::Enemy) {
+            continue;
+        }
+
+        if (!living->GetIsAlive()) {
+            ++scan.dead_hostile_count;
+            continue;
+        }
+
+        const float distance = Distance2D(me->pos, living->pos);
+        if (distance > GW::Constants::Range::Compass) {
+            continue;
+        }
+
+        ++scan.hostile_count;
+        if (distance <= 1500.0f) {
+            ++scan.close_hostile_count;
+        }
+        if (distance < scan.closest_hostile_distance) {
+            scan.closest_hostile_distance = distance;
+            scan.closest_hostile_agent_id = living->agent_id;
+        }
+        scan.in_combat = scan.in_combat || living->GetInCombatStance() || living->GetIsAttacking() || living->GetIsCasting();
+    }
+
+    if (scan.closest_hostile_distance == std::numeric_limits<float>::max()) {
+        scan.closest_hostile_distance = 0.0f;
+    }
+    scan.in_combat = scan.in_combat || me->GetInCombatStance() || scan.close_hostile_count > 0;
+    return scan;
+}
+
+std::string PlaymatePlugin::CurrentPersonaName() const
+{
+    return WideToUtf8(CurrentPersonaNameWide().c_str());
+}
+
+std::wstring PlaymatePlugin::CurrentPersonaNameWide() const
+{
+    const GW::CharContext* context = GW::GetCharContext();
+    if (!context) {
+        return L"Unknown Character";
+    }
+
+    const size_t name_length = wcsnlen_s(context->player_name, _countof(context->player_name));
+    if (name_length == 0) {
+        return L"Unknown Character";
+    }
+    return {context->player_name, name_length};
+}
+
+std::pair<std::string, std::string> PlaymatePlugin::GetConfig() const
+{
+    std::lock_guard lock(config_mutex_);
+    return {backend_url_, api_token_};
+}
+
+std::filesystem::path PlaymatePlugin::LocalLogPath() const
+{
+    std::lock_guard lock(config_mutex_);
+    if (local_log_folder_.empty()) {
+        return {};
+    }
+    return local_log_folder_ / (L"telemetry-" + CurrentLocalLogDate() + L".jsonl");
+}
+
+std::string PlaymatePlugin::EventsUrl() const
+{
+    const auto [backend_url, _] = GetConfig();
+    return backend_url + "/v1/playmate/events";
+}
+
+std::string PlaymatePlugin::RepliesUrl() const
+{
+    const auto [backend_url, _] = GetConfig();
+    return backend_url + "/v1/playmate/replies";
+}
+
+void PlaymatePlugin::OnSendChat(GW::HookStatus*, const GW::UI::UIMessage message_id, void* wparam, void*)
+{
+    if (!active_plugin || message_id != GW::UI::UIMessage::kSendChatMessage || !wparam) {
+        return;
+    }
+    const auto* packet = static_cast<GW::UI::UIPacket::kSendChatMessage*>(wparam);
+    if (!packet->message || !*packet->message) {
+        return;
+    }
+
+    const auto channel = GW::Chat::GetChannel(*packet->message);
+    if (channel != GW::Chat::CHANNEL_GROUP) {
+        return;
+    }
+
+    active_plugin->QueueTelemetry("player_chat", "Player", ChannelName(channel), PlayerMessageText(packet->message));
+}
+
+void PlaymatePlugin::OnWriteToChatLog(GW::HookStatus*, const GW::UI::UIMessage message_id, void* wparam, void*)
+{
+    if (!active_plugin || message_id != GW::UI::UIMessage::kWriteToChatLog || !wparam) {
+        return;
+    }
+
+    const auto* packet = static_cast<GW::UI::UIPacket::kWriteToChatLog*>(wparam);
+    if (!packet->message || !*packet->message) {
+        return;
+    }
+
+    const auto channel = packet->channel;
+    if (channel == GW::Chat::CHANNEL_GROUP) {
+        return;
+    }
+
+    const auto filtered_message = FilterChatLogMessage(channel, packet->message);
+    if (!filtered_message) {
+        return;
+    }
+    active_plugin->QueueTelemetry("chat_log", "Game", ChannelName(channel), *filtered_message);
+}
+
+void PlaymatePlugin::OnMapOrQuestEvent(GW::HookStatus*, const GW::UI::UIMessage message_id, void*, void*)
+{
+    if (!active_plugin) {
+        return;
+    }
+
+    switch (message_id) {
+        case GW::UI::UIMessage::kMapLoaded:
+            {
+                std::lock_guard lock(active_plugin->gameplay_state_mutex_);
+                active_plugin->last_agent_states_.clear();
+                active_plugin->last_mission_progress_.clear();
+            }
+            active_plugin->QueueSnapshotEvent("map_loaded");
+            break;
+        case GW::UI::UIMessage::kMapChange:
+            {
+                std::lock_guard lock(active_plugin->gameplay_state_mutex_);
+                active_plugin->last_agent_states_.clear();
+                active_plugin->last_mission_progress_.clear();
+            }
+            active_plugin->QueueSnapshotEvent("map_change");
+            break;
+        case GW::UI::UIMessage::kQuestAdded:
+            active_plugin->QueueSnapshotEvent("quest_added");
+            break;
+        case GW::UI::UIMessage::kQuestDetailsChanged:
+            active_plugin->QueueSnapshotEvent("quest_details_changed");
+            break;
+        default:
+            break;
+    }
+}
+
+void PlaymatePlugin::OnAgentState(GW::HookStatus*, GW::Packet::StoC::AgentState* packet)
+{
+    if (!active_plugin || !packet || !IsAgentInCurrentParty(packet->agent_id)) {
+        return;
+    }
+
+    constexpr uint32_t dead_state_bit = 0x10;
+    const bool is_dead = (packet->state & dead_state_bit) != 0;
+    bool was_dead = false;
+    {
+        std::lock_guard lock(active_plugin->gameplay_state_mutex_);
+        const auto previous = active_plugin->last_agent_states_.find(packet->agent_id);
+        was_dead = previous != active_plugin->last_agent_states_.end() && (previous->second & dead_state_bit) != 0;
+        active_plugin->last_agent_states_[packet->agent_id] = packet->state;
+    }
+
+    if (is_dead == was_dead) {
+        return;
+    }
+
+    TelemetryEvent event;
+    event.event_type = is_dead ? "party_member_down" : "party_member_recovered";
+    event.message = is_dead ? "Party member down." : "Party member recovered.";
+    event.agent_id = packet->agent_id;
+    event.agent_name = PartyAgentName(packet->agent_id);
+    event.alert_type = event.event_type;
+    event.severity = is_dead ? "HIGH" : "LOW";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnPartyDefeated(GW::HookStatus*, GW::Packet::StoC::PartyDefeated*)
+{
+    if (!active_plugin) {
+        return;
+    }
+
+    TelemetryEvent event;
+    event.event_type = "party_defeated";
+    event.message = "The party was defeated.";
+    event.alert_type = event.event_type;
+    event.severity = "HIGH";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnObjectiveAdd(GW::HookStatus*, GW::Packet::StoC::ObjectiveAdd* packet)
+{
+    if (!active_plugin || !packet) {
+        return;
+    }
+
+    TelemetryEvent event;
+    event.event_type = "mission_objective_added";
+    event.objective_id = packet->objective_id;
+    event.objective_name = WideToUtf8(packet->name);
+    event.message = event.objective_name.empty() ? "Mission objective added." : std::format("Mission objective added: {}", event.objective_name);
+    event.severity = "NORMAL";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnObjectiveDone(GW::HookStatus*, GW::Packet::StoC::ObjectiveDone* packet)
+{
+    if (!active_plugin || !packet) {
+        return;
+    }
+
+    TelemetryEvent event;
+    event.event_type = "mission_objective_completed";
+    event.objective_id = packet->objective_id;
+    event.message = std::format("Mission objective completed: {}.", packet->objective_id);
+    event.alert_type = event.event_type;
+    event.severity = "HIGH";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnObjectiveUpdateName(GW::HookStatus*, GW::Packet::StoC::ObjectiveUpdateName* packet)
+{
+    if (!active_plugin || !packet) {
+        return;
+    }
+
+    TelemetryEvent event;
+    event.event_type = "mission_objective_updated";
+    event.objective_id = packet->objective_id;
+    event.objective_name = WideToUtf8(packet->objective_name);
+    event.message = event.objective_name.empty() ? "Mission objective updated." : std::format("Mission objective updated: {}", event.objective_name);
+    event.severity = "NORMAL";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnCreateMissionProgress(GW::HookStatus*, GW::Packet::StoC::CreateMissionProgress* packet)
+{
+    if (!active_plugin || !packet) {
+        return;
+    }
+
+    {
+        std::lock_guard lock(active_plugin->gameplay_state_mutex_);
+        active_plugin->last_mission_progress_[packet->id] = packet->filled;
+    }
+
+    TelemetryEvent event;
+    event.event_type = "mission_progress_started";
+    event.objective_id = packet->id;
+    event.progress_current = packet->filled;
+    event.progress_total = 1.0f;
+    event.message = std::format("Mission progress started at {:.0f} percent.", packet->filled * 100.0f);
+    event.severity = "NORMAL";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnUpdateMissionProgress(GW::HookStatus*, GW::Packet::StoC::UpdateMissionProgress* packet)
+{
+    if (!active_plugin || !packet) {
+        return;
+    }
+
+    bool changed_enough = false;
+    {
+        std::lock_guard lock(active_plugin->gameplay_state_mutex_);
+        const auto previous = active_plugin->last_mission_progress_.find(packet->id);
+        changed_enough = previous == active_plugin->last_mission_progress_.end()
+            || std::abs(previous->second - packet->filled) >= 0.01f;
+        active_plugin->last_mission_progress_[packet->id] = packet->filled;
+    }
+    if (!changed_enough) {
+        return;
+    }
+
+    TelemetryEvent event;
+    event.event_type = "mission_progress_updated";
+    event.objective_id = packet->id;
+    event.progress_current = packet->filled;
+    event.progress_total = 1.0f;
+    event.message = std::format("Mission progress updated to {:.0f} percent.", packet->filled * 100.0f);
+    event.severity = packet->filled >= 1.0f ? "HIGH" : "NORMAL";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnVanquishProgress(GW::HookStatus*, GW::Packet::StoC::VanquishProgress* packet)
+{
+    if (!active_plugin || !packet) {
+        return;
+    }
+
+    TelemetryEvent event;
+    event.event_type = "vanquish_progress";
+    event.foes_killed = packet->foes_killed;
+    event.foes_remaining = packet->foes_remaining;
+    event.progress_current = static_cast<float>(packet->foes_killed);
+    event.progress_total = static_cast<float>(packet->foes_killed + packet->foes_remaining);
+    event.message = std::format("Vanquish progress: {} foes killed, {} remaining.", packet->foes_killed, packet->foes_remaining);
+    event.severity = packet->foes_remaining <= 5 ? "HIGH" : "NORMAL";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnVanquishComplete(GW::HookStatus*, GW::Packet::StoC::VanquishComplete* packet)
+{
+    if (!active_plugin || !packet) {
+        return;
+    }
+
+    TelemetryEvent event;
+    event.event_type = "vanquish_complete";
+    event.map_id = packet->map_id;
+    event.message = std::format("Vanquish complete. Reward: {} XP, {} gold.", packet->experience, packet->gold);
+    event.alert_type = event.event_type;
+    event.severity = "HIGH";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
