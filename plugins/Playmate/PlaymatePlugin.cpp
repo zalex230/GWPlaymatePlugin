@@ -394,6 +394,74 @@ namespace {
 
         return std::format(L"\x108\x107{}\x1", cleaned);
     }
+
+    std::wstring TtsMessage(const std::wstring& reply)
+    {
+        constexpr size_t max_tts_chars = 260;
+        std::wstring cleaned;
+        cleaned.reserve(std::min(reply.size(), max_tts_chars));
+        bool last_was_space = false;
+        for (const wchar_t ch : reply) {
+            const bool is_space = ch == L'\r' || ch == L'\n' || ch == L'\t' || ch == L' ';
+            if (is_space) {
+                if (!last_was_space && !cleaned.empty()) {
+                    cleaned.push_back(L' ');
+                }
+                last_was_space = true;
+            }
+            else if (ch >= 0x20) {
+                cleaned.push_back(ch);
+                last_was_space = false;
+            }
+            if (cleaned.size() >= max_tts_chars) {
+                break;
+            }
+        }
+        while (!cleaned.empty() && cleaned.back() == L' ') {
+            cleaned.pop_back();
+        }
+        return cleaned;
+    }
+
+    std::vector<uint32_t> WStringCodepoints(const std::wstring& value)
+    {
+        std::vector<uint32_t> out;
+        out.reserve(value.size());
+        for (const wchar_t ch : value) {
+            out.push_back(static_cast<uint32_t>(ch));
+        }
+        return out;
+    }
+
+    void PlayMp3Async(const std::filesystem::path& path)
+    {
+        using MciSendStringWFn = DWORD(WINAPI*)(LPCWSTR, LPWSTR, UINT, HWND);
+        static HMODULE winmm = LoadLibraryW(L"winmm.dll");
+        static auto mci_send_string = winmm ? reinterpret_cast<MciSendStringWFn>(GetProcAddress(winmm, "mciSendStringW")) : nullptr;
+        static std::mutex mci_mutex;
+        static std::wstring current_alias;
+        static uint32_t alias_id = 0;
+
+        if (!mci_send_string) {
+            return;
+        }
+
+        std::lock_guard lock(mci_mutex);
+        if (!current_alias.empty()) {
+            const std::wstring close = L"close " + current_alias;
+            mci_send_string(close.c_str(), nullptr, 0, nullptr);
+            current_alias.clear();
+        }
+
+        current_alias = L"PlaymateTts" + std::to_wstring(++alias_id);
+        const std::wstring open = L"open \"" + path.wstring() + L"\" type mpegvideo alias " + current_alias;
+        if (mci_send_string(open.c_str(), nullptr, 0, nullptr) != 0) {
+            current_alias.clear();
+            return;
+        }
+        const std::wstring play = L"play " + current_alias;
+        mci_send_string(play.c_str(), nullptr, 0, nullptr);
+    }
 }
 
 DLLAPI ToolboxPlugin* ToolboxPluginInstance()
@@ -455,6 +523,7 @@ void PlaymatePlugin::LoadSettings(const wchar_t* folder)
     LoadSetting("send_to_backend", send_to_backend_);
     LoadSetting("inject_replies", inject_replies_);
     LoadSetting("show_speech_bubbles", show_speech_bubbles_);
+    LoadSetting("speak_replies", speak_replies_);
     LoadSetting("environment_radar", environment_radar_);
     LoadSetting("backend_url", backend_url);
     LoadSetting("api_token", api_token);
@@ -483,6 +552,7 @@ void PlaymatePlugin::SaveSettings(const wchar_t* folder)
     SaveSetting("send_to_backend", send_to_backend_);
     SaveSetting("inject_replies", inject_replies_);
     SaveSetting("show_speech_bubbles", show_speech_bubbles_);
+    SaveSetting("speak_replies", speak_replies_);
     SaveSetting("environment_radar", environment_radar_);
     SaveSetting("backend_url", std::string(backend_url_input_));
     SaveSetting("api_token", std::string(api_token_input_));
@@ -500,6 +570,7 @@ void PlaymatePlugin::DrawSettings()
     config_changed |= ImGui::Checkbox("Send telemetry to backend", &send_to_backend_);
     config_changed |= ImGui::Checkbox("Inject companion replies into party chat", &inject_replies_);
     config_changed |= ImGui::Checkbox("Show companion speech bubbles", &show_speech_bubbles_);
+    config_changed |= ImGui::Checkbox("Speak companion replies with GWDevHub TTS", &speak_replies_);
     config_changed |= ImGui::Checkbox("Enable environment radar", &environment_radar_);
     config_changed |= ImGui::InputText("Local backend URL", backend_url_input_, sizeof(backend_url_input_));
     config_changed |= ImGui::InputText("Local API token", api_token_input_, sizeof(api_token_input_), ImGuiInputTextFlags_Password);
@@ -629,9 +700,16 @@ void PlaymatePlugin::WorkerLoop()
         bool has_event = false;
         {
             std::unique_lock lock(queue_mutex_);
-            queue_cv_.wait_until(lock, next_poll, [&] { return !running_ || !outbound_.empty(); });
+            queue_cv_.wait_until(lock, next_poll, [&] { return !running_ || !outbound_.empty() || !tts_requests_.empty(); });
             if (!running_) {
                 break;
+            }
+            if (!tts_requests_.empty()) {
+                auto reply = std::move(tts_requests_.front());
+                tts_requests_.pop_front();
+                lock.unlock();
+                GenerateAndPlayCompanionTts(reply);
+                continue;
             }
             if (!outbound_.empty()) {
                 event = std::move(outbound_.front());
@@ -1003,6 +1081,7 @@ void PlaymatePlugin::FlushRepliesToChat()
     for (const auto& reply : replies) {
         const auto persona = CurrentPersonaNameWide();
         ShowCompanionSpeechBubble(reply);
+        QueueCompanionTts(reply);
         GW::Chat::WriteChat(GW::Chat::CHANNEL_GROUP, reply.c_str(), persona.c_str(), true);
         std::lock_guard lock(status_mutex_);
         ++received_count_;
@@ -1010,6 +1089,86 @@ void PlaymatePlugin::FlushRepliesToChat()
         last_reply_ms_ = MonotonicMs();
         last_reply_status_ = "Reply received";
     }
+}
+
+void PlaymatePlugin::QueueCompanionTts(std::wstring reply)
+{
+    if (!tts_enabled_.load()) {
+        return;
+    }
+    reply = TtsMessage(reply);
+    if (reply.empty()) {
+        return;
+    }
+    {
+        std::lock_guard lock(queue_mutex_);
+        if (tts_requests_.size() >= 4) {
+            tts_requests_.pop_front();
+        }
+        tts_requests_.push_back(std::move(reply));
+    }
+    queue_cv_.notify_one();
+}
+
+void PlaymatePlugin::GenerateAndPlayCompanionTts(const std::wstring& reply)
+{
+    if (reply.empty()) {
+        return;
+    }
+
+    const auto cache_dir = LocalLogPath().parent_path() / "tts-cache";
+    std::error_code ec;
+    std::filesystem::create_directories(cache_dir, ec);
+    if (ec) {
+        std::lock_guard lock(status_mutex_);
+        last_reply_status_ = "TTS cache unavailable";
+        return;
+    }
+
+    const auto cache_key = std::format("{:x}_{}.mp3", std::hash<std::wstring>{}(reply), reply.size());
+    const auto audio_path = cache_dir / cache_key;
+    if (!std::filesystem::exists(audio_path)) {
+        glz::generic request_body = glz::generic::object_t{};
+        const auto codepoints = WStringCodepoints(reply);
+        request_body["encoded"] = codepoints;
+        request_body["decoded"] = codepoints;
+        request_body["language"] = static_cast<uint32_t>(GW::Constants::Language::English);
+        request_body["speaker_gender"] = "f";
+        request_body["speaker_race"] = "Human";
+        request_body["player_gender"] = "f";
+
+        HttpRequest request;
+        request.SetUrl("https://tts.gwtoolbox.com/decode.mp3");
+        request.SetMethod(HttpMethod::Post);
+        request.SetUserAgent("GWToolbox++ Playmate");
+        request.SetTimeoutMs(10000);
+        request.SetConnectTimeoutMs(2500);
+        request.SetFollowLocation(true);
+        request.SetVerifyHost(false);
+        request.SetVerifyPeer(false);
+        request.SetHeader("Content-Type", "application/json");
+        request.SetHeader("Accept", "audio/mpeg");
+        const auto json = glz::write_json(request_body).value_or(std::string{});
+        request.SetPostContent(json, ContentFlag::Copy);
+
+        if (!request.Perform() || request.GetStatusCode() < 200 || request.GetStatusCode() >= 300 || request.GetContent().empty()) {
+            std::lock_guard lock(status_mutex_);
+            last_reply_status_ = std::format("TTS failed: HTTP {}", request.GetStatusCode());
+            return;
+        }
+
+        std::ofstream out(audio_path, std::ios::binary);
+        out.write(request.GetContent().data(), static_cast<std::streamsize>(request.GetContent().size()));
+        if (!out.good()) {
+            std::lock_guard lock(status_mutex_);
+            last_reply_status_ = "TTS cache write failed";
+            return;
+        }
+    }
+
+    GW::GameThread::Enqueue([audio_path] {
+        PlayMp3Async(audio_path);
+    });
 }
 
 void PlaymatePlugin::ShowCompanionSpeechBubble(const std::wstring& reply) const
@@ -1045,6 +1204,7 @@ void PlaymatePlugin::ApplyConfig()
     backend_enabled_.store(send_to_backend_);
     reply_injection_enabled_.store(inject_replies_);
     speech_bubbles_enabled_.store(show_speech_bubbles_);
+    tts_enabled_.store(speak_replies_);
     environment_radar_enabled_.store(environment_radar_);
     poll_interval_ms_.store(static_cast<int>(poll_interval_sec_ * 1000.0f));
     radar_interval_sec_ = std::clamp(radar_interval_sec_, 2.0f, 30.0f);
