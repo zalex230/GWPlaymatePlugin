@@ -335,9 +335,7 @@ namespace {
         if (living->login_number) {
             return WideToUtf8(GW::Agents::GetPlayerNameByLoginNumber(living->login_number));
         }
-        std::wstring decoded_name;
-        GW::Agents::AsyncGetAgentName(living, decoded_name);
-        return WideToUtf8(decoded_name.c_str());
+        return {};
     }
 
     bool IsReplyTriggerEvent(const std::string& event_type)
