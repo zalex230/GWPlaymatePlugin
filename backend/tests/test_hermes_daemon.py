@@ -113,6 +113,9 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("22-year-old", prompt)
         self.assertIn("normal party chat", prompt)
         self.assertIn("Plain is usually better than clever", prompt)
+        self.assertIn("Make dialogue feel ongoing", prompt)
+        self.assertIn("Do not end every reply with a question", prompt)
+        self.assertIn("conversational handoff", prompt)
         self.assertIn("Do not overplay 'princess', 'brat', 'cute girl', or 'snarky companion'", prompt)
         self.assertIn("'ugh'", prompt)
         self.assertIn("'shut up'", prompt)
@@ -229,7 +232,10 @@ class HermesDaemonTests(unittest.TestCase):
             use_ollama=True,
         )
 
-        self.assertEqual([reply.message for reply in replies], ["We wouldn’t. Not while they’re threatening Ascalon."])
+        self.assertEqual(
+            [reply.message for reply in replies],
+            ["We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second."],
+        )
 
     def test_azele_rejects_overly_mature_old_voice(self) -> None:
         self.assertRegex("Very undignified of me, tragically.", LOW_QUALITY_REPLY_PATTERNS)
@@ -290,7 +296,7 @@ class HermesDaemonTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(decision.response, "Yeah. You know me.")
+        self.assertEqual(decision.response, "Yeah. You know me. Keep up.")
 
     def test_azele_fallback_does_not_misread_you_as_yo(self) -> None:
         decision = fallback_rule_decision(
