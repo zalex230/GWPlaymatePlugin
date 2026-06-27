@@ -166,6 +166,71 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("Never say you looked online", prompt)
         self.assertIn("answer in Azele's voice", prompt)
 
+    def test_azele_prompt_treats_charr_as_ascalonian_threat(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "you want to hunt some charr today?",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_name": "Ascalon City",
+                    "hostile_count": 0,
+                    "close_hostile_count": 0,
+                },
+            }
+        )
+
+        prompt = build_character_reply_prompt(event)
+
+        self.assertIn("defending Ascalon", prompt)
+        self.assertIn("Never imply Charr need saving", prompt)
+        self.assertIn("head toward the Wall/Northlands", prompt)
+
+    def test_azele_charr_hunting_reply_defends_ascalon(self) -> None:
+        replies = process_event(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "nevermind. you want to hunt some charr today?",
+                    "payload": {
+                        "event_type": "player_chat",
+                        "persona": "Azele",
+                        "map_name": "Ascalon City",
+                        "hostile_count": 0,
+                        "close_hostile_count": 0,
+                    },
+                }
+            ),
+            use_ollama=True,
+        )
+
+        self.assertEqual(
+            [reply.message for reply in replies],
+            ["Yes. Charr threaten Ascalon. We prepare, then go past the Wall."],
+        )
+
+    def test_azele_rejects_saving_charr_premise(self) -> None:
+        replies = process_event(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "why would we ever save the charr?",
+                    "payload": {
+                        "event_type": "player_chat",
+                        "persona": "Azele",
+                        "map_name": "Ascalon City",
+                    },
+                }
+            ),
+            use_ollama=True,
+        )
+
+        self.assertEqual([reply.message for reply in replies], ["We wouldn’t. Not while they’re threatening Ascalon."])
+
     def test_azele_rejects_overly_mature_old_voice(self) -> None:
         self.assertRegex("Very undignified of me, tragically.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("Obviously. I have a whole vibe to protect.", LOW_QUALITY_REPLY_PATTERNS)

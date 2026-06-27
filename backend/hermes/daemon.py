@@ -778,6 +778,8 @@ def persona_profile(persona: str) -> str:
             "She still cares about looking cute and put-together because it feels good and gives her control, not because she is shallow. "
             "Her world is Ashford, Ascalon City, Regent Valley, Lakeside County, the Northlands, and the ordinary hopes "
             "and small dangers of pre-Searing life. "
+            "Charr are a real threat to Ascalon and her people; if the player brings up hunting or fighting them, "
+            "she should understand that as defending home, not as a random errand or a moral dilemma about saving Charr. "
             "She is friendly, alert, practical, bright, playful, and casually flirty, but she talks like a believable 22-year-old real person. "
             "She is not grandiose or constantly poetic. She does not force elemental metaphors into ordinary conversation. "
             "She can tease lightly, notice danger, comment on quests, or react to party chat, but keeps it natural and conversational. "
@@ -804,6 +806,7 @@ def compact_persona_profile(persona: str) -> str:
         return (
             "Azele: 22-year-old Ascalonian Elementalist in pre-Searing. "
             "Bright, observant, casually flirty, expressive when safe, focused under pressure. "
+            "She is Ascalonian; Charr threaten her people and city, so player talk about hunting or fighting Charr should make sense to her. "
             "She is pretty and knows it, likes attention and style, and can be playful or a little vain, but she should not perform an archetype in every line. "
             "Most replies should sound like normal party chat from a real young woman: direct, specific, relaxed, and not overly quippy. "
             "She uses casual phrasing sparingly: 'ugh', 'okay', 'fine', 'shut up' as teasing, not formal elegant phrasing. "
@@ -984,6 +987,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- If the player points something out, react to that thing.\n"
         "- Do not contradict the player's message unless clearly impossible.\n"
         "- Do not invent a different location, target, or situation.\n"
+        "- If the player suggests hunting, killing, or fighting Charr, Azele should treat that as defending Ascalon from a real enemy threat.\n"
+        "- Never imply Charr need saving when the player suggested hunting or fighting them. If no Charr are nearby, say to prepare or head toward the Wall/Northlands.\n"
         "- Casual, lively, and natural. Plain is usually better than clever. Forced quips and catchphrases are bad.\n"
         "- Her default safe-mode vibe is relaxed, young, confident, attentive, and lightly playful when it fits.\n"
         "- Teasing, flirting, or being a little vain is okay when it fits. Plain greetings should be normal, not automatically performative.\n"
@@ -1030,7 +1035,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Player: 'ooo a purple' -> 'Oh, that’s actually pretty good.'\n"
         "Player: 'you look good in that outfit' -> 'I know. Still nice to hear.'\n"
         "Player: 'you know everyone is staring, right?' -> 'Let them. I’m not exactly hiding.'\n"
-        "Player: 'lets find more charr to kill' -> 'If they’re close, we handle them. Stay with me.'\n"
+        "Player: 'lets find more charr to kill' -> 'Yes. They threaten Ascalon. We prepare, then hit them.'\n"
+        "Player: 'why would we ever save the charr?' -> 'We wouldn’t. Not while they’re threatening Ascalon.'\n"
         "Player: 'relax Azele' -> 'I am relaxed. Mostly.'\n"
         "Player: 'you are quite the bratty one, huh' -> 'Maybe a little. You seem fine with it.'\n"
         "Player: 'of course you are' -> 'Yeah. You know me.'\n"
@@ -1341,6 +1347,34 @@ def first_fresh_reply(candidates: list[str]) -> str:
     return candidates[-1] if candidates else ""
 
 
+CHARR_ACTION_PATTERN = re.compile(
+    r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcharr\b"
+    r"|\bcharr\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
+    re.IGNORECASE,
+)
+
+CHARR_SAVE_PATTERN = re.compile(
+    r"\b(?:save|saving|spare|rescue|protect)\b.*\bcharr\b"
+    r"|\bcharr\b.*\b(?:save|saving|spare|rescue|protect)\b",
+    re.IGNORECASE,
+)
+
+
+def azele_charr_intent_reply(event: TelemetryEvent) -> str | None:
+    if event.persona.strip().lower() != "azele":
+        return None
+    message = readable_game_text(event.message).lower()
+    if "charr" not in message:
+        return None
+    if CHARR_SAVE_PATTERN.search(message):
+        return "We wouldn’t. Not while they’re threatening Ascalon."
+    if CHARR_ACTION_PATTERN.search(message):
+        if has_visible_enemy_context(event):
+            return "Yes. Charr threaten Ascalon. Stay close and hit hard."
+        return "Yes. Charr threaten Ascalon. We prepare, then go past the Wall."
+    return None
+
+
 def ollama_generate_visible(prompt: str) -> str:
     url = settings.ollama_host.rstrip("/") + "/api/generate"
     payload = {
@@ -1388,6 +1422,13 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
 
 
 def character_reply_with_ollama(event: TelemetryEvent) -> HermesDecision:
+    if charr_reply := azele_charr_intent_reply(event):
+        return HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="NORMAL",
+            response=charr_reply,
+        )
     started_at = time.perf_counter()
     response = ollama_generate_visible(build_character_reply_prompt(event))
     elapsed = time.perf_counter() - started_at
@@ -1547,6 +1588,8 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
 
 
 def azele_fast_reply(event: TelemetryEvent) -> str:
+    if charr_reply := azele_charr_intent_reply(event):
+        return charr_reply
     message = (event.message or "").lower()
     quest = readable_game_text(event.active_quest_name)
     if any(phrase in message for phrase in {"you ok", "you okay", "are you ok", "are you okay", "u ok", "you better"}):
@@ -1631,7 +1674,7 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
             ]
         )
     if "charr" in message:
-        return "If they’re actually nearby, we stay sharp."
+        return "They’re a threat to Ascalon. We don’t take that lightly."
     if "quest" in message and quest:
         return f"{quest}, then. Let’s keep it simple and not wander into three new problems."
     if "lol" in message or "haha" in message:
