@@ -1139,12 +1139,20 @@ def ambient_heartbeat_reply(now: float | None = None) -> CompanionReplyInsert | 
         return reply
 
 
+def recent_companion_context(limit: int = 4) -> str:
+    lines = list(recent_reply_texts)[-limit:]
+    if not lines:
+        return "None"
+    return "\n".join(f"[Azele]: {line}" for line in lines)
+
+
 def build_character_reply_prompt(event: TelemetryEvent) -> str:
     if event.event_type == "player_chat" and event.channel == "party":
         task = "Reply directly to the player's latest party chat."
         context_block = (
             f"PLAYER JUST SAID: {event.message!r}\n"
             "This is the main thing to answer. Do not change topics.\n"
+            "If the player is answering Azele's recent question or prompt, continue that exchange instead of treating it as a new topic.\n"
         )
     elif event.event_type == "target_changed":
         task = "React briefly to the player's called/selected target."
@@ -1214,6 +1222,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"Task: {task}\n\n"
         f"{context_block}\n"
         f"Reliable live facts: {compact_live_facts(event)}\n\n"
+        f"Recent Azele replies:\n{recent_companion_context()}\n\n"
         f"Recent live context:\n{world_state.prompt_context()}\n"
         f"Relevant memories:\n{relevant_memory_context(event.persona)}\n\n"
         f"GW Wiki background for player question:\n{gw_wiki_context(event)}\n\n"
@@ -1222,6 +1231,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"- Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
         "- Prefer 6 to 16 words per chat line. Fragments are okay.\n"
         "- Directly answer, acknowledge, or react to the player's exact intent.\n"
+        "- First decide whether the player's line is a reply to Azele's recent line. If yes, answer that thread directly.\n"
+        "- Do not answer a continuation like 'with you', 'lead the way then', or 'I usually clear inventory' with a generic greeting or unrelated quip.\n"
         "- Make dialogue feel ongoing, not concluded. Often include a small conversational handoff, tag-on, or next beat the player can respond to.\n"
         "- Do not end every reply with a question. Mix questions with hooks like 'if you want', 'your call', 'I can work with that', or a playful aside.\n"
         "- If the player asks if you are okay or confused by your last reply, answer that concern directly and do not flirt first.\n"
@@ -1923,6 +1934,38 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "You noticed. Good, keep doing that.",
             ]
         )
+    if re.search(r"\b(inventory|bags?|sell|salvage|merchant|storage|gear)\b", message):
+        return first_fresh_reply(
+            [
+                "Good. Clear the bags first, then we move cleaner.",
+                "That makes sense. Less rummaging while something is trying to kill us.",
+                "Practical. I like it when preparation saves us embarrassment later.",
+            ]
+        )
+    if re.search(r"\b(lead the way|you lead|go ahead|after you)\b", message):
+        return first_fresh_reply(
+            [
+                "Gladly. Stay close and try to look like this was your idea.",
+                "Alright. I’ll set the pace, you keep up.",
+                "Fine by me. Watch the edges while I pick the road.",
+            ]
+        )
+    if re.search(r"\b(with you|i'm with you|im with you|you with me|same page)\b", message):
+        return first_fresh_reply(
+            [
+                "Good. I like hearing that before we do something reckless.",
+                "Then stay close. I’m easier to follow when you admit I’m right.",
+                "Good. That makes two of us, which is better odds than usual.",
+            ]
+        )
+    if re.search(r"\b(stay alive|staying alive|survive|not dying|don't die|dont die)\b", message):
+        return first_fresh_reply(
+            [
+                "Fair. Alive first, clever later.",
+                "That is annoyingly sensible. I can work with alive.",
+                "Good plan. I prefer my heroics with breathing afterward.",
+            ]
+        )
     if re.search(r"\b(hello|helo|hi|hey|yo|there)\b", message):
         return first_fresh_reply(
             [
@@ -1932,7 +1975,7 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "There you are. What’s up?",
             ]
         )
-    if re.search(r"\b(ready|go)\b", message):
+    if re.search(r"^(ready|go)$|\b(let'?s go|ready now|i'?m ready|im ready)\b", message):
         return first_fresh_reply(
             [
                 "Ready. Stay close.",

@@ -25,6 +25,7 @@ from backend.hermes_daemon.daemon import (
     likely_gw_wiki_question,
     model_reply_has_bad_shape,
     process_event,
+    recent_companion_context,
     recent_reply_texts,
     should_flush_memory_buffer,
     should_use_ollama_for_event,
@@ -135,6 +136,26 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("'shut up'", prompt)
         self.assertIn("Do not start replies with filler noises", prompt)
         self.assertIn("do not make her sound overly mature", prompt.lower())
+
+    def test_player_chat_prompt_includes_recent_azele_reply_for_continuity(self) -> None:
+        recent_reply_texts.append("City air helps. What do you usually do first when you get back here?")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "well, typically clear out inventory to get ready for our next run",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        prompt = build_character_reply_prompt(event)
+
+        self.assertIn("Recent Azele replies", prompt)
+        self.assertIn("[Azele]: City air helps. What do you usually do first when you get back here?", prompt)
+        self.assertIn("continue that exchange", prompt)
+        self.assertIn("I usually clear inventory", prompt)
+        self.assertIn("answer that thread directly", prompt)
+        self.assertIn("City air helps. What do you usually do first", recent_companion_context())
 
     def test_azele_rejects_sanitized_refusal_replies(self) -> None:
         self.assertRegex("I can't engage with that, keep things appropriate.", LOW_QUALITY_REPLY_PATTERNS)
@@ -250,6 +271,42 @@ class HermesDaemonTests(unittest.TestCase):
             [reply.message for reply in replies],
             ["We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second."],
         )
+
+    def test_azele_fallback_handles_inventory_continuation_before_ready_keyword(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "well, typically clear out inventory to get ready for our next run",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertIn(decision.response, {
+            "Good. Clear the bags first, then we move cleaner.",
+            "That makes sense. Less rummaging while something is trying to kill us.",
+            "Practical. I like it when preparation saves us embarrassment later.",
+        })
+
+    def test_azele_fallback_handles_lead_the_way_continuation(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "lead the way then",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertIn(decision.response, {
+            "Gladly. Stay close and try to look like this was your idea.",
+            "Alright. I’ll set the pace, you keep up.",
+            "Fine by me. Watch the edges while I pick the road.",
+        })
 
     def test_azele_rejects_overly_mature_old_voice(self) -> None:
         self.assertRegex("Very undignified of me, tragically.", LOW_QUALITY_REPLY_PATTERNS)
