@@ -1435,6 +1435,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Do not react to vague radar/combat-start noise. Speak about combat only for visible enemies, called targets, taking damage, or a party member down.\n"
         "- Do not append unrelated questions like 'when did this happen?' to greetings or simple replies.\n"
         "- If the player asks a question, answer the question.\n"
+        "- Do not invent vague hooks like rumors, stories, signs, whispers, or 'they said' unless the player's message, NPC dialogue, quest text, or live event explicitly mentions them.\n"
         "- If GW Wiki background is provided, use it as factual background, paraphrase it, and answer in Azele's voice.\n"
         "- Never say you looked online, checked a wiki, read a page, or used a source. She should sound like she knows, remembers, or has heard it in-world.\n"
         "- If wiki background includes future/post-Searing information Azele would not know, do not present it as her lived knowledge.\n"
@@ -1916,6 +1917,16 @@ def azele_clarification_reply(message: str) -> str | None:
     previous_lower = previous.lower()
     if not previous:
         return None
+    if re.search(r"\bwhat\s+(?:rumou?rs?|stories|signs|whispers?)\b", message):
+        if re.search(r"\brumou?rs?\b", previous_lower):
+            return first_fresh_reply(
+                [
+                    "Fair. I was being vague. I meant Barradin feels suspiciously quiet, not any specific rumor.",
+                    "No specific rumor. I made that sound more solid than it was.",
+                    "You’re right to ask. I meant the mood around Barradin, not some real lead.",
+                ]
+            )
+        return "Fair. I made that sound more mysterious than I meant."
     if re.search(r"\bstaring at (?:who|whom)\b|\bwho\b", message) and "star" in previous_lower:
         if "ranik" in previous_lower or "soldier" in previous_lower or "posture" in previous_lower:
             return first_fresh_reply(
@@ -1972,6 +1983,20 @@ def misdirects_wearable_to_player(reply: str) -> bool:
             re.IGNORECASE,
         )
     )
+
+
+def invents_unsupported_rumor(reply: str, event: TelemetryEvent) -> bool:
+    if not re.search(r"\brumou?rs?\b", reply, re.IGNORECASE):
+        return False
+    evidence = " ".join(
+        [
+            event.message or "",
+            event.active_quest_name or "",
+            event.active_quest_objectives or "",
+            getattr(event, "agent_name", "") or "",
+        ]
+    )
+    return not re.search(r"\brumou?rs?\b", evidence, re.IGNORECASE)
 
 
 CHARR_ACTION_PATTERN = re.compile(
@@ -2076,6 +2101,8 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("low quality model reply")
     if is_azele_wearable_context(event.message) and misdirects_wearable_to_player(reply):
         raise ValueError("misdirected wearable ownership")
+    if invents_unsupported_rumor(reply, event):
+        raise ValueError("unsupported rumor reference")
     if model_reply_has_bad_shape(reply):
         raise ValueError("bad shape model reply")
     if is_too_similar_to_recent_replies(reply):

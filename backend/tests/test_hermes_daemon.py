@@ -220,6 +220,23 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("I meant this", reply.response)
         self.assertIn("Ranik", reply.response)
 
+    def test_fallback_clarifies_unsupported_rumor_hook(self) -> None:
+        recent_reply_texts.append("Yeah, but peace like this feels too quiet for Barradin and all those rumors out there.")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "what rumours?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"vague|specific|mood")
+        self.assertNotIn("one more detail", reply.response.lower())
+
     def test_fallback_clarifies_recent_map_quip_question(self) -> None:
         recent_reply_texts.append("Fort Ranik. Soldiers, posture, and everyone pretending not to stare.")
         event = event_from_game_log(
@@ -346,6 +363,26 @@ class HermesDaemonTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "misdirected wearable ownership"):
             validate_model_reply("Lead on then; show off your boots while I keep things clean behind you.", event)
+
+    def test_model_reply_rejects_unsupported_rumor_hook(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "System",
+                "channel": "system",
+                "message": "map_loaded",
+                "metadata": {
+                    "event_type": "map_loaded",
+                    "persona": "Azele",
+                    "map_id": 166,
+                    "map_name": "Green Hills County",
+                    "active_quest_name": "A Mesmer's Burden",
+                    "active_quest_objectives": "Unlock Barradin's Estate.",
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unsupported rumor reference"):
+            validate_model_reply("Peace like this feels too quiet for Barradin and all those rumors out there.", event)
 
     def test_model_reply_allows_player_owned_wearable_when_explicit(self) -> None:
         event = event_from_game_log(
