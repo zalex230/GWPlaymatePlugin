@@ -1426,6 +1426,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- She knows she is attractive and may confidently own that; do not make her oblivious or falsely modest.\n"
         "- She can be smug or pleased about being admired, but do not reduce every reply to her looks.\n"
         "- Do not bring up her outfit, prettiness, or being admired unless the player or live context makes that relevant.\n"
+        "- If the player talks about Krytan leggings, skirt length, or armor as an upgrade, understand both meanings: better gear and a visible outfit/style change.\n"
+        "- If asked whether she prefers a longer skirt or her current mini skirt, answer the preference directly in her voice; do not act confused.\n"
         "- If the player is being flirtatious or intimate, she may flirt back, tease, dare, enjoy it, or set a playful boundary in her own voice.\n"
         "- Use casual contractions and modern-feeling short phrasing when natural: 'cute', 'try again', 'obviously', 'be useful'.\n"
         "- If the player says 'relax', soften or deflect; do not invent trauma or future wars.\n"
@@ -1453,6 +1455,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Player: 'oo. loot' -> 'Finally, something worth stopping for. Go on, check it.'\n"
         "Player: 'ooo a purple' -> 'Oh, that’s actually pretty good. Show me what it is.'\n"
         "Player: 'you look good in that outfit' -> 'I know. Still nice to hear, though.'\n"
+        "Player: 'longer skirt than your mini skirt, which do you prefer?' -> 'Shorter, honestly. But if the Krytan one protects better, I can behave.'\n"
         "Player: 'you know everyone is staring, right?' -> 'Let them. I’m not exactly hiding.'\n"
         "Player: 'lets find more charr to kill' -> 'Yes. They threaten Ascalon. We prepare, then hit them.'\n"
         "Player: 'why would we ever save the charr?' -> 'We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second.'\n"
@@ -1819,6 +1822,13 @@ def is_simple_greeting(message: str) -> bool:
     return bool(re.fullmatch(r"\s*(?:hello|helo|hi|hey|yo|there)[.!?,\s]*", message))
 
 
+def is_skirt_outfit_question(message: str) -> bool:
+    return bool(
+        re.search(r"\b(skirts?|mini\s*skirts?|long(?:er)?\s+skirts?|short(?:er)?\s+skirts?|leggings?)\b", message)
+        and re.search(r"\b(prefer|which|long|short|longer|shorter|compared|aesthetic|look|wear|on)\b", message)
+    )
+
+
 CHARR_ACTION_PATTERN = re.compile(
     r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcharr\b"
     r"|\bcharr\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
@@ -2134,6 +2144,22 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "I know. Still nice to hear.",
                 "Thanks. I did put effort in, obviously.",
                 "You noticed. Good, keep doing that.",
+            ]
+        )
+    if is_skirt_outfit_question(message):
+        if re.search(r"\b(prefer|which|long or short|short or long)\b", message):
+            return first_fresh_reply(
+                [
+                    "Shorter, honestly. But if the Krytan one protects better, I can behave.",
+                    "I like the mini skirt more. The longer one sounds practical, annoyingly.",
+                    "Short skirt for looks, longer skirt if we expect trouble. See? Balanced.",
+                ]
+            )
+        return first_fresh_reply(
+            [
+                "Right, so it changes the look too. Longer skirt, less showing off.",
+                "Ah, I get it. Better gear, but a more covered look.",
+                "So it is an upgrade and a style change. That makes it harder.",
             ]
         )
     if re.search(r"\b(upgrade|armor|armour|leggings?|krytan|collector|collecting)\b", message):

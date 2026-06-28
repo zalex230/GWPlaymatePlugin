@@ -236,6 +236,60 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertNotIn("hey.", reply.response.lower())
         self.assertRegex(reply.response.lower(), r"krytan|legging|upgrade|gear|fit")
 
+    def test_fallback_understands_krytan_leggings_as_outfit_change(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "its a longer skirt though, compared to the mini skirt you have on. which do you prefer?",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 172,
+                    "map_name": "Fort Ranik",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"short|mini|longer|skirt|krytan")
+        self.assertNotIn("one more detail", reply.response.lower())
+        self.assertNotIn("what you're looking at", reply.response.lower())
+
+    def test_fallback_answers_long_or_short_skirt_preference(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "do you prefer long or short skirts?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"short|mini|longer|skirt")
+        self.assertNotIn("point me at", reply.response.lower())
+
+    def test_prompt_mentions_krytan_leggings_style_context(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "do you prefer the longer Krytan leggings or your mini skirt?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        prompt = build_character_reply_prompt(event)
+
+        self.assertIn("Krytan leggings", prompt)
+        self.assertIn("visible outfit/style change", prompt)
+        self.assertIn("longer skirt or her current mini skirt", prompt)
+
     def test_azele_rejects_sanitized_refusal_replies(self) -> None:
         self.assertRegex("I can't engage with that, keep things appropriate.", LOW_QUALITY_REPLY_PATTERNS)
 
