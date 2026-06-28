@@ -1915,7 +1915,7 @@ def ollama_generate_visible(prompt: str) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with urllib.request.urlopen(request, timeout=settings.ollama_timeout_seconds) as response:
         data = json.loads(response.read().decode("utf-8"))
     return str(data.get("response") or "")
 
@@ -1939,13 +1939,6 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
 
 
 def character_reply_with_ollama(event: TelemetryEvent) -> HermesDecision:
-    if charr_reply := azele_charr_intent_reply(event):
-        return HermesDecision(
-            should_speak=True,
-            channel_override="CHANNEL_PARTY",
-            urgency="NORMAL",
-            response=charr_reply,
-        )
     started_at = time.perf_counter()
     response = ollama_generate_visible(build_character_reply_prompt(event))
     elapsed = time.perf_counter() - started_at

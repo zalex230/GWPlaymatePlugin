@@ -52,6 +52,7 @@ class BackendSettings:
     ollama_model: str = os.getenv("OLLAMA_MODEL", "gemma3:12b")
     ollama_num_ctx: int = _int_env("OLLAMA_NUM_CTX", 8192)
     ollama_num_predict: int = _int_env("OLLAMA_NUM_PREDICT", 48)
+    ollama_timeout_seconds: float = _float_env("OLLAMA_TIMEOUT_SECONDS", 60.0)
     hermes_use_ollama: bool = _bool_env("HERMES_USE_OLLAMA", False)
     hermes_min_speak_seconds: float = _float_env("HERMES_MIN_SPEAK_SECONDS", 20.0)
     recent_chat_limit: int = _int_env("HERMES_RECENT_CHAT_LIMIT", 10)

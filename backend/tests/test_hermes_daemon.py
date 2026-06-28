@@ -363,50 +363,66 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("head toward the Wall/Northlands", prompt)
 
     def test_azele_charr_hunting_reply_defends_ascalon(self) -> None:
-        replies = process_event(
-            event_from_game_log(
-                {
-                    "sender": "Player",
-                    "channel": "party",
-                    "message": "nevermind. you want to hunt some charr today?",
-                    "payload": {
-                        "event_type": "player_chat",
-                        "persona": "Azele",
-                        "map_name": "Ascalon City",
-                        "hostile_count": 0,
-                        "close_hostile_count": 0,
-                    },
-                }
-            ),
-            use_ollama=True,
-        )
+        prompts: list[str] = []
+        original_generate = hermes_daemon.ollama_generate_visible
+        try:
+            hermes_daemon.ollama_generate_visible = lambda prompt: prompts.append(prompt) or "Yes. They threaten Ascalon, so we prepare and hit them properly."
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "Player",
+                        "channel": "party",
+                        "message": "nevermind. you want to hunt some charr today?",
+                        "payload": {
+                            "event_type": "player_chat",
+                            "persona": "Azele",
+                            "map_name": "Ascalon City",
+                            "hostile_count": 0,
+                            "close_hostile_count": 0,
+                        },
+                    }
+                ),
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.ollama_generate_visible = original_generate
 
         self.assertEqual(
             [reply.message for reply in replies],
-            ["Yes. Charr threaten Ascalon. We prepare, then go past the Wall."],
+            ["Yes. They threaten Ascalon, so we prepare and hit them properly."],
         )
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("defending Ascalon", prompts[0])
 
     def test_azele_rejects_saving_charr_premise(self) -> None:
-        replies = process_event(
-            event_from_game_log(
-                {
-                    "sender": "Player",
-                    "channel": "party",
-                    "message": "why would we ever save the charr?",
-                    "payload": {
-                        "event_type": "player_chat",
-                        "persona": "Azele",
-                        "map_name": "Ascalon City",
-                    },
-                }
-            ),
-            use_ollama=True,
-        )
+        prompts: list[str] = []
+        original_generate = hermes_daemon.ollama_generate_visible
+        try:
+            hermes_daemon.ollama_generate_visible = lambda prompt: prompts.append(prompt) or "We would not. Not while they are threatening Ascalon."
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "Player",
+                        "channel": "party",
+                        "message": "why would we ever save the charr?",
+                        "payload": {
+                            "event_type": "player_chat",
+                            "persona": "Azele",
+                            "map_name": "Ascalon City",
+                        },
+                    }
+                ),
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.ollama_generate_visible = original_generate
 
         self.assertEqual(
             [reply.message for reply in replies],
-            ["We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second."],
+            ["We would not. Not while they are threatening Ascalon."],
         )
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("Never imply Charr need saving", prompts[0])
 
     def test_azele_fallback_handles_inventory_continuation_before_ready_keyword(self) -> None:
         decision = fallback_rule_decision(
