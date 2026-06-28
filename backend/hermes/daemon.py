@@ -1376,6 +1376,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"Task: {task}\n\n"
         f"{context_block}\n"
         f"Reliable live facts: {compact_live_facts(event)}\n\n"
+        f"Recent conversation transcript:\n{recent_conversation_context()}\n\n"
         f"Recent Azele replies:\n{recent_companion_context()}\n\n"
         f"Recent live context:\n{world_state.prompt_context()}\n"
         f"Relevant memories:\n{relevant_memory_context(event.persona)}\n\n"
@@ -1386,6 +1387,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Prefer 6 to 16 words per chat line. Fragments are okay.\n"
         "- Directly answer, acknowledge, or react to the player's exact intent.\n"
         "- First decide whether the player's line is a reply to Azele's recent line. If yes, answer that thread directly.\n"
+        "- If the player asks 'what?', 'what was that?', 'what do you mean?', or says they did not understand, explain Azele's immediately previous line plainly.\n"
+        "- Do not answer clarification questions with fresh quips, teasing, or unrelated questions; clarify the prior message first.\n"
         "- Do not answer a continuation like 'with you', 'lead the way then', or 'I usually clear inventory' with a generic greeting or unrelated quip.\n"
         "- Make dialogue feel ongoing, not concluded. Often include a small conversational handoff, tag-on, or next beat the player can respond to.\n"
         "- Do not end every reply with a question. Mix questions with hooks like 'if you want', 'your call', 'I can work with that', or a playful aside.\n"
@@ -1726,6 +1729,78 @@ def recent_reply_context() -> str:
     return "\n".join(f"- {line}" for line in lines) or "None"
 
 
+def recent_conversation_context(limit: int = 10) -> str:
+    entries: list[tuple[datetime, str, str]] = []
+    if _supabase_configured():
+        try:
+            client = create_supabase_client(settings)
+            current_session = world_state.session_id or settings.active_session
+            logs_response = (
+                client.table(GAME_LOGS_TABLE)
+                .select("created_at,sender,channel,message,payload")
+                .order("created_at", desc=True)
+                .limit(40)
+                .execute()
+            )
+            for row in logs_response.data or []:
+                payload = row.get("payload") or {}
+                if payload.get("event_type") != "player_chat" or row.get("channel") != "party":
+                    continue
+                if payload.get("persona") not in {"Azele", None, ""}:
+                    continue
+                session_id = payload.get("session_id") or settings.active_session
+                if current_session and session_id != current_session:
+                    continue
+                created_at = _parse_created_at(row.get("created_at"))
+                message = readable_game_text(row.get("message"))
+                if created_at and message:
+                    entries.append((created_at, "the player", message))
+
+            replies_response = (
+                client.table(COMPANION_REPLIES_TABLE)
+                .select("created_at,message,persona,payload")
+                .eq("persona", "Azele")
+                .order("created_at", desc=True)
+                .limit(40)
+                .execute()
+            )
+            for row in replies_response.data or []:
+                payload = row.get("payload") or {}
+                session_id = payload.get("session_id") or settings.active_session
+                if current_session and session_id != current_session:
+                    continue
+                created_at = _parse_created_at(row.get("created_at"))
+                message = readable_game_text(row.get("message"))
+                if created_at and message:
+                    entries.append((created_at, "Azele", message))
+        except Exception as exc:
+            print(f"Hermes conversation retrieval failed ({type(exc).__name__}).", flush=True)
+
+    local_time = datetime.now(timezone.utc)
+    for line in list(world_state.recent_chat_history)[-max(1, limit // 2):]:
+        match = re.match(r"\[(?P<speaker>[^\]]+)\]:\s*(?P<message>.+)", line)
+        if match:
+            speaker = "the player" if match.group("speaker").lower() in {"player", "alex"} else match.group("speaker")
+            entries.append((local_time, speaker, readable_game_text(match.group("message"))))
+            local_time = datetime.fromtimestamp(local_time.timestamp() + 0.001, timezone.utc)
+    for line in list(recent_reply_texts)[-max(1, limit // 2):]:
+        entries.append((local_time, "Azele", readable_game_text(line)))
+        local_time = datetime.fromtimestamp(local_time.timestamp() + 0.001, timezone.utc)
+
+    if entries:
+        entries.sort(key=lambda item: item[0])
+        lines: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        for _, speaker, message in entries:
+            key = (speaker, message)
+            if message and key not in seen:
+                lines.append(f"[{speaker}]: {message}")
+                seen.add(key)
+        return "\n".join(lines[-limit:]) or "None"
+
+    return "None"
+
+
 def reply_similarity(left: str, right: str) -> float:
     def words(text: str) -> set[str]:
         return {
@@ -1808,6 +1883,8 @@ def azele_clarification_reply(message: str) -> str | None:
             ]
         )
     if re.search(r"\b(more of what|what do you mean|what was that|what\?)\b", message):
+        if previous:
+            return clamp_gw_chat_line(f"I meant this: {previous}")
         return first_fresh_reply(
             [
                 "Fair. I made that sound vague by accident.",

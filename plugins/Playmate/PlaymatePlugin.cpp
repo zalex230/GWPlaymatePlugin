@@ -291,6 +291,12 @@ namespace {
         return std::clamp(std::max(by_chars, by_words) + 650U, 1800U, 7000U);
     }
 
+    uint32_t EstimateMultiMessageDelayMs(const std::wstring& message)
+    {
+        const uint32_t base_delay = EstimateTtsPostPlayDelayMs(message);
+        return std::clamp(base_delay + (base_delay / 2U) + 1200U, 3000U, 10000U);
+    }
+
     float Distance2D(const GW::GamePos& a, const GW::GamePos& b)
     {
         const float dx = a.x - b.x;
@@ -1207,7 +1213,7 @@ void PlaymatePlugin::QueueReply(QueuedReply reply)
             reply.not_before_ms = now;
         }
         if (reply.multi_message && reply.line_count > reply.line_index) {
-            next_multi_reply_allowed_ms_ = std::max(next_multi_reply_allowed_ms_, now + EstimateTtsPostPlayDelayMs(reply.message));
+            next_multi_reply_allowed_ms_ = std::max(next_multi_reply_allowed_ms_, now + EstimateMultiMessageDelayMs(reply.message));
         }
         inbound_replies_.push_back(std::move(reply));
     }
@@ -1237,7 +1243,7 @@ void PlaymatePlugin::FlushRepliesToChat()
         ShowCompanionSpeechBubble(reply.message);
         QueuedTtsRequest tts_request{reply.message, reply.audio_url};
         if (reply.multi_message && reply.line_count > reply.line_index) {
-            tts_request.post_play_delay_ms = EstimateTtsPostPlayDelayMs(reply.message);
+            tts_request.post_play_delay_ms = EstimateMultiMessageDelayMs(reply.message);
         }
         QueueCompanionTts(std::move(tts_request));
         GW::Chat::WriteChat(GW::Chat::CHANNEL_GROUP, reply.message.c_str(), persona.c_str(), true);

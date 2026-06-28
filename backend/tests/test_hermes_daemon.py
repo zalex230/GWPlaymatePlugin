@@ -34,6 +34,7 @@ from backend.hermes_daemon.daemon import (
     persona_living_notes,
     prompt_relevant_memories,
     process_event,
+    recent_conversation_context,
     recent_companion_context,
     recent_reply_texts,
     should_flush_memory_buffer,
@@ -176,6 +177,43 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("I usually clear inventory", prompt)
         self.assertIn("answer that thread directly", prompt)
         self.assertIn("City air helps. What do you usually do first", recent_companion_context())
+
+    def test_prompt_includes_recent_conversation_transcript(self) -> None:
+        world_state.recent_chat_history.append("[Player]: what was that?")
+        recent_reply_texts.append("I meant the Ranik soldiers were pretending not to stare.")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "what?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        prompt = build_character_reply_prompt(event)
+
+        self.assertIn("Recent conversation transcript", prompt)
+        self.assertIn("[Player]: what was that?", prompt)
+        self.assertIn("[Azele]: I meant the Ranik soldiers", prompt)
+        self.assertIn("explain Azele's immediately previous line plainly", prompt)
+        self.assertIn("Do not answer clarification questions with fresh quips", prompt)
+
+    def test_fallback_clarification_references_previous_reply(self) -> None:
+        recent_reply_texts.append("Ranik has that soldier-stiff feeling again. Do you think they practice that?")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "what was that?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertIn("I meant this", reply.response)
+        self.assertIn("Ranik", reply.response)
 
     def test_fallback_clarifies_recent_map_quip_question(self) -> None:
         recent_reply_texts.append("Fort Ranik. Soldiers, posture, and everyone pretending not to stare.")
