@@ -162,6 +162,8 @@ private:
     void ShowCompanionSpeechBubble(const std::wstring& reply) const;
     void QueueCompanionTts(QueuedTtsRequest request);
     void GenerateAndPlayCompanionTts(const QueuedTtsRequest& request);
+    void WaitForTtsPlaybackSlot();
+    void MarkTtsPlaybackStarted(const std::wstring& reply, uint32_t extra_delay_ms);
     void ApplyConfig();
     void SetStatus(std::string status);
 
@@ -223,6 +225,7 @@ private:
     std::deque<TelemetryEvent> outbound_;
     std::deque<QueuedReply> inbound_replies_;
     std::deque<QueuedTtsRequest> tts_requests_;
+    uint64_t next_tts_play_allowed_ms_ = 0;
 
     mutable std::mutex status_mutex_;
     std::string status_ = "Idle";

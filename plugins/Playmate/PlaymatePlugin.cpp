@@ -1245,6 +1245,19 @@ void PlaymatePlugin::QueueCompanionTts(QueuedTtsRequest request)
     queue_cv_.notify_one();
 }
 
+void PlaymatePlugin::WaitForTtsPlaybackSlot()
+{
+    const uint64_t now = MonotonicMs();
+    if (next_tts_play_allowed_ms_ > now) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(next_tts_play_allowed_ms_ - now));
+    }
+}
+
+void PlaymatePlugin::MarkTtsPlaybackStarted(const std::wstring& reply, const uint32_t extra_delay_ms)
+{
+    next_tts_play_allowed_ms_ = MonotonicMs() + std::max(EstimateTtsPostPlayDelayMs(reply), extra_delay_ms);
+}
+
 void PlaymatePlugin::GenerateAndPlayCompanionTts(const QueuedTtsRequest& request)
 {
     const std::wstring& reply = request.message;
@@ -1276,12 +1289,11 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const QueuedTtsRequest& request
             }
         }
         if (std::filesystem::exists(audio_path)) {
+            WaitForTtsPlaybackSlot();
             GW::GameThread::Enqueue([audio_path] {
                 PlayMp3Async(audio_path);
             });
-            if (request.post_play_delay_ms > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(request.post_play_delay_ms));
-            }
+            MarkTtsPlaybackStarted(reply, request.post_play_delay_ms);
             return;
         }
     }
@@ -1330,12 +1342,11 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const QueuedTtsRequest& request
         }
     }
 
+    WaitForTtsPlaybackSlot();
     GW::GameThread::Enqueue([audio_path] {
         PlayMp3Async(audio_path);
     });
-    if (request.post_play_delay_ms > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(request.post_play_delay_ms));
-    }
+    MarkTtsPlaybackStarted(reply, request.post_play_delay_ms);
 }
 
 void PlaymatePlugin::ShowCompanionSpeechBubble(const std::wstring& reply) const
