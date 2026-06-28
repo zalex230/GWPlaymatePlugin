@@ -28,12 +28,14 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
 #include <fstream>
 #include <format>
 #include <cmath>
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <thread>
 #include <string_view>
 #include <utility>
 
@@ -276,6 +278,17 @@ namespace {
     uint64_t MonotonicMs()
     {
         return GetTickCount64();
+    }
+
+    uint32_t EstimateTtsPostPlayDelayMs(const std::wstring& message)
+    {
+        const size_t visible_chars = std::ranges::count_if(message, [](const wchar_t ch) {
+            return !std::iswspace(ch);
+        });
+        const size_t word_count = static_cast<size_t>(std::ranges::count(message, L' ')) + 1;
+        const uint32_t by_chars = static_cast<uint32_t>(visible_chars * 55);
+        const uint32_t by_words = static_cast<uint32_t>(word_count * 310);
+        return std::clamp(std::max(by_chars, by_words) + 650U, 1800U, 7000U);
     }
 
     float Distance2D(const GW::GamePos& a, const GW::GamePos& b)
@@ -1195,10 +1208,15 @@ void PlaymatePlugin::FlushRepliesToChat()
         std::lock_guard lock(queue_mutex_);
         replies.swap(inbound_replies_);
     }
-    for (const auto& reply : replies) {
+    for (size_t index = 0; index < replies.size(); ++index) {
+        const auto& reply = replies[index];
         const auto persona = CurrentPersonaNameWide();
         ShowCompanionSpeechBubble(reply.message);
-        QueueCompanionTts({reply.message, reply.audio_url});
+        QueuedTtsRequest tts_request{reply.message, reply.audio_url};
+        if (index + 1 < replies.size()) {
+            tts_request.post_play_delay_ms = EstimateTtsPostPlayDelayMs(reply.message);
+        }
+        QueueCompanionTts(std::move(tts_request));
         GW::Chat::WriteChat(GW::Chat::CHANNEL_GROUP, reply.message.c_str(), persona.c_str(), true);
         std::lock_guard lock(status_mutex_);
         ++received_count_;
@@ -1261,6 +1279,9 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const QueuedTtsRequest& request
             GW::GameThread::Enqueue([audio_path] {
                 PlayMp3Async(audio_path);
             });
+            if (request.post_play_delay_ms > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(request.post_play_delay_ms));
+            }
             return;
         }
     }
@@ -1312,6 +1333,9 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const QueuedTtsRequest& request
     GW::GameThread::Enqueue([audio_path] {
         PlayMp3Async(audio_path);
     });
+    if (request.post_play_delay_ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(request.post_play_delay_ms));
+    }
 }
 
 void PlaymatePlugin::ShowCompanionSpeechBubble(const std::wstring& reply) const

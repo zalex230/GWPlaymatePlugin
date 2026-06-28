@@ -119,6 +119,7 @@ private:
     struct QueuedTtsRequest {
         std::wstring message;
         std::string audio_url;
+        uint32_t post_play_delay_ms = 0;
     };
 
     struct EnvironmentScan {
