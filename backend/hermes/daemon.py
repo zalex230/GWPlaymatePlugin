@@ -75,7 +75,10 @@ PROACTIVE_EVENT_TYPES = {
 SPEAKING_ENVIRONMENT_ALERT_TYPES = {"under_attack", "danger_spike", "party_member_down", "combat_started"}
 EMERGENCY_ALERT_TYPES = {"under_attack", "party_member_down", "combat_started"}
 NOTABLE_CHAT_PATTERNS = re.compile(
-    r"\b(gold|green|unique|rare|drop|dropped|item|chest|boss|elite|skill|quest|completed|morale|death|died|resurrect|shrine)\b",
+    r"\b("
+    r"gold|green|unique|rare|drop|dropped|item|chest|boss|elite|skill|quest|completed|morale|death|died|resurrect|shrine|"
+    r"upgrade|armor|armour|leggings?|krytan"
+    r")\b",
     re.IGNORECASE,
 )
 NPC_DIALOGUE_CHANNELS = {"local", "emote"}
@@ -171,7 +174,7 @@ DURABLE_PLAYER_MEMORY_PATTERNS = re.compile(
 NOTABLE_DISCOVERY_PATTERNS = re.compile(
     r"\b("
     r"rare|purple|gold|green|unique|boss|elite|tome|dye|black dye|"
-    r"completed|quest complete|reward|discovered|found|learned|met|"
+    r"completed|quest complete|reward|upgrade|armor|armour|leggings?|krytan|discovered|found|learned|met|"
     r"rurik|devona|mhenlo|cynn|charr|northlands|catacombs"
     r")\b",
     re.IGNORECASE,
@@ -1812,6 +1815,10 @@ def azele_clarification_reply(message: str) -> str | None:
     return None
 
 
+def is_simple_greeting(message: str) -> bool:
+    return bool(re.fullmatch(r"\s*(?:hello|helo|hi|hey|yo|there)[.!?,\s]*", message))
+
+
 CHARR_ACTION_PATTERN = re.compile(
     r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcharr\b"
     r"|\bcharr\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
@@ -2129,6 +2136,22 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "You noticed. Good, keep doing that.",
             ]
         )
+    if re.search(r"\b(upgrade|armor|armour|leggings?|krytan|collector|collecting)\b", message):
+        if "legging" in message or "krytan" in message:
+            return first_fresh_reply(
+                [
+                    "Krytan leggings? If they’re an upgrade, yes. Let me try them.",
+                    "That is useful. Better leggings now means fewer bruises later.",
+                    "Good find. If they fit better than these, I’m not arguing.",
+                ]
+            )
+        return first_fresh_reply(
+            [
+                "If it’s an upgrade, take it. Looking good and staying alive can both happen.",
+                "That sounds useful. Let’s not walk past better gear.",
+                "Good. Better gear first, then we can pretend we planned ahead.",
+            ]
+        )
     if re.search(r"\b(inventory|bags?|sell|salvage|merchant|storage|gear)\b", message):
         return first_fresh_reply(
             [
@@ -2161,7 +2184,7 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "Good plan. I prefer my heroics with breathing afterward.",
             ]
         )
-    if re.search(r"\b(hello|helo|hi|hey|yo|there)\b", message):
+    if is_simple_greeting(message):
         return first_fresh_reply(
             [
                 "Hey. I’m here.",

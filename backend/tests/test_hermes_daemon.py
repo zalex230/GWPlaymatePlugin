@@ -199,6 +199,43 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("soldiers", reply.response.lower())
         self.assertNotIn("ask me properly", reply.response.lower())
 
+    def test_fallback_prioritizes_krytan_leggings_upgrade_over_greeting(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hey. so im checking out what Varis is collecting in Fort Ranik. there's a Krytan legging, which is an upgrade",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 172,
+                    "map_name": "Fort Ranik",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"krytan|legging|upgrade|gear|fit")
+        self.assertNotIn("what are we doing", reply.response.lower())
+
+    def test_fallback_does_not_treat_theres_as_greeting(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "there's a Krytan legging upgrade here",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertNotIn("hey.", reply.response.lower())
+        self.assertRegex(reply.response.lower(), r"krytan|legging|upgrade|gear|fit")
+
     def test_azele_rejects_sanitized_refusal_replies(self) -> None:
         self.assertRegex("I can't engage with that, keep things appropriate.", LOW_QUALITY_REPLY_PATTERNS)
 
