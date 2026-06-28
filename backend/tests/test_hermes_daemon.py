@@ -529,7 +529,7 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(model_reply_has_bad_shape("Feels good being home after all that travel though it looks different but"))
         self.assertFalse(model_reply_has_bad_shape("I know. Still nice to hear."))
 
-    def test_ollama_generation_is_only_for_player_chat(self) -> None:
+    def test_ollama_generation_includes_player_map_and_ambient_events(self) -> None:
         chat_event = event_from_game_log(
             {
                 "sender": "Player",
@@ -546,9 +546,18 @@ class HermesDaemonTests(unittest.TestCase):
                 "metadata": {"event_type": "map_loaded", "persona": "Azele", "map_id": 146},
             }
         )
+        snapshot_event = event_from_game_log(
+            {
+                "sender": "System",
+                "channel": "system",
+                "message": "snapshot",
+                "metadata": {"event_type": "snapshot", "persona": "Azele", "map_id": 148, "map_name": "Ascalon City"},
+            }
+        )
 
         self.assertTrue(should_use_ollama_for_event(chat_event))
-        self.assertFalse(should_use_ollama_for_event(map_event))
+        self.assertTrue(should_use_ollama_for_event(map_event))
+        self.assertTrue(should_use_ollama_for_event(snapshot_event))
 
     def test_polling_skips_records_from_before_daemon_start(self) -> None:
         older = hermes_daemon.DAEMON_STARTED_AT - timedelta(minutes=5)
@@ -869,6 +878,69 @@ class HermesDaemonTests(unittest.TestCase):
             "If we stay too long, I’m going to start fussing with my hair, and then you have to pretend not to notice.",
         })
 
+    def test_map_entry_uses_ollama_generation_when_enabled(self) -> None:
+        original = hermes_daemon.character_reply_with_ollama
+        hermes_daemon.character_reply_with_ollama = lambda event: hermes_daemon.HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="LOW",
+            response="Generated map thought. Where first?",
+        )
+        try:
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "System",
+                        "channel": "system",
+                        "message": "map_loaded",
+                        "metadata": {
+                            "event_type": "map_loaded",
+                            "persona": "Azele",
+                            "session_id": "map-llm-test",
+                            "map_id": 148,
+                            "map_name": "Ascalon City",
+                        },
+                    }
+                ),
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.character_reply_with_ollama = original
+
+        self.assertEqual([reply.message for reply in replies], ["Generated map thought. Where first?"])
+
+    def test_ambient_snapshot_uses_ollama_generation_when_enabled(self) -> None:
+        original = hermes_daemon.character_reply_with_ollama
+        hermes_daemon.character_reply_with_ollama = lambda event: hermes_daemon.HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="LOW",
+            response="Generated quiet moment. What are you watching?",
+        )
+        try:
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "System",
+                        "channel": "system",
+                        "message": "snapshot",
+                        "metadata": {
+                            "event_type": "snapshot",
+                            "persona": "Azele",
+                            "session_id": "ambient-llm-test",
+                            "map_id": 148,
+                            "map_name": "Ascalon City",
+                            "close_hostile_count": 0,
+                        },
+                    }
+                ),
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.character_reply_with_ollama = original
+
+        self.assertEqual([reply.message for reply in replies], ["Generated quiet moment. What are you watching?"])
+
     def test_snapshot_ambient_quip_respects_cooldown(self) -> None:
         event = event_from_game_log(
             {
@@ -910,6 +982,32 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(reply.urgency, "LOW")
         self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
         self.assertIsNone(second)
+
+    def test_ambient_heartbeat_uses_ollama_generation_when_enabled(self) -> None:
+        now = time.time()
+        world_state.persona = "Azele"
+        world_state.session_id = "ambient-heartbeat-llm"
+        world_state.map_id = 148
+        world_state.map_name = "Ascalon City"
+        world_state.last_interaction_timestamp = now - (AMBIENT_HEARTBEAT_ACTIVITY_SECONDS / 2)
+        world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
+
+        original = hermes_daemon.character_reply_with_ollama
+        hermes_daemon.character_reply_with_ollama = lambda event: hermes_daemon.HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="LOW",
+            response="Generated heartbeat line. Still with me?",
+        )
+        try:
+            reply = ambient_heartbeat_reply(now=now, use_ollama=True)
+        finally:
+            hermes_daemon.character_reply_with_ollama = original
+
+        self.assertIsNotNone(reply)
+        assert reply is not None
+        self.assertEqual(reply.message, "Generated heartbeat line. Still with me?")
+        self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
 
     def test_ambient_heartbeat_ignores_unknown_persona(self) -> None:
         now = time.time()

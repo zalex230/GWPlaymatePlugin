@@ -1248,7 +1248,7 @@ def ambient_quip(event: TelemetryEvent) -> str:
     )
 
 
-def ambient_heartbeat_reply(now: float | None = None) -> CompanionReplyInsert | None:
+def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = False) -> CompanionReplyInsert | None:
     checked_at = now if now is not None else time.time()
     with world_state_lock:
         if world_state.persona.strip().lower() in {"", "unknown character", "system"}:
@@ -1281,22 +1281,45 @@ def ambient_heartbeat_reply(now: float | None = None) -> CompanionReplyInsert | 
             player_hp=world_state.player_hp,
             session_id=world_state.session_id,
         )
-        reply = CompanionReplyInsert(
-            persona=world_state.persona,
-            message=clamp_gw_chat_line(ambient_quip(event)),
-            channel="party",
-            session_id=world_state.session_id,
+        persona = world_state.persona
+        session_id = world_state.session_id
+        map_id = world_state.map_id
+        map_name = world_state.map_name
+    if use_ollama and should_use_ollama_for_event(event):
+        try:
+            decision = character_reply_with_ollama(event)
+            decision.urgency = "LOW"
+        except Exception as exc:
+            print(f"Ollama ambient heartbeat failed; using fallback quip ({type(exc).__name__}).", flush=True)
+            decision = HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="LOW",
+                response=clamp_gw_chat_line(ambient_quip(event)),
+            )
+    else:
+        decision = HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
             urgency="LOW",
-            metadata={
-                "trigger": "ambient_heartbeat",
-                "channel_override": "CHANNEL_PARTY",
-                "map_id": world_state.map_id,
-                "map_name": world_state.map_name,
-            },
+            response=clamp_gw_chat_line(ambient_quip(event)),
         )
+    replies = replies_from_decision(decision, persona=persona, session_id=session_id)
+    if not replies:
+        return None
+    reply = replies[0]
+    reply.metadata.update(
+        {
+            "trigger": "ambient_heartbeat",
+            "channel_override": "CHANNEL_PARTY",
+            "map_id": map_id,
+            "map_name": map_name,
+        }
+    )
+    with world_state_lock:
         recent_reply_texts.append(reply.message)
         world_state.mark_spoken()
-        return reply
+    return reply
 
 
 def recent_companion_context(limit: int = 4) -> str:
@@ -1345,6 +1368,14 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
             f"NPC/on-screen dialogue heard: {event.message!r}\n"
             "Azele can mutter back, comment to the player, or lightly answer the NPC. "
             "Do not pretend the NPC is waiting for a full conversation unless the line directly addresses the party.\n"
+        )
+    elif is_ambient_snapshot_event(event):
+        map_label = map_area_label(event)
+        task = f"Make a rare, conversational ambient comment about being in {map_label}."
+        context_block = (
+            f"Ambient moment: {event.message!r}\n"
+            f"Lore-safe map context: {map_lore_hint(event) or 'No specific lore hint. Stay local and do not invent details.'}\n"
+            "This is not urgent. Sound alive and present, but do not force a joke.\n"
         )
     elif event.event_type == "active_quest_changed":
         quest = readable_game_text(event.active_quest_name)
@@ -1641,11 +1672,20 @@ def should_use_direct_character_reply(event: TelemetryEvent) -> bool:
         return True
     if is_npc_dialogue_event(event):
         return True
+    if event.event_type in MAP_COMMENT_EVENT_TYPES:
+        return True
+    if is_ambient_snapshot_event(event):
+        return True
     return False
 
 
 def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
-    return (event.event_type == "player_chat" and event.channel == "party") or is_npc_dialogue_event(event)
+    return (
+        (event.event_type == "player_chat" and event.channel == "party")
+        or is_npc_dialogue_event(event)
+        or event.event_type in MAP_COMMENT_EVENT_TYPES
+        or is_ambient_snapshot_event(event)
+    )
 
 
 def should_consider_speaking_for_event(event: TelemetryEvent) -> bool:
@@ -2799,7 +2839,7 @@ async def ambient_heartbeat_loop() -> None:
             identity = ambient_identity() if _supabase_configured() else None
             if identity:
                 pending = await asyncio.to_thread(has_unconsumed_ambient_reply, identity[0], identity[1])
-                reply = None if pending else ambient_heartbeat_reply()
+                reply = None if pending else ambient_heartbeat_reply(use_ollama=settings.hermes_use_ollama)
                 if reply:
                     await asyncio.to_thread(insert_reply, reply)
                     print(f"Hermes ambient quip inserted for {reply.persona}: {reply.message}", flush=True)
