@@ -966,7 +966,13 @@ void PlaymatePlugin::PollReplies()
         if (!parsed.reply_items.empty()) {
             for (const auto& reply : parsed.reply_items) {
                 if (!reply.message.empty()) {
-                    QueueReply({Utf8ToWide(reply.message), reply.audio_url});
+                    QueueReply({
+                        Utf8ToWide(reply.message),
+                        reply.audio_url,
+                        reply.multi_message,
+                        reply.line_index,
+                        reply.line_count,
+                    });
                 }
             }
         }
@@ -1193,6 +1199,16 @@ void PlaymatePlugin::QueueReply(QueuedReply reply)
     }
     {
         std::lock_guard lock(queue_mutex_);
+        const uint64_t now = MonotonicMs();
+        if (reply.multi_message && reply.line_index > 1) {
+            reply.not_before_ms = std::max(now, next_multi_reply_allowed_ms_);
+        }
+        else {
+            reply.not_before_ms = now;
+        }
+        if (reply.multi_message && reply.line_count > reply.line_index) {
+            next_multi_reply_allowed_ms_ = std::max(next_multi_reply_allowed_ms_, now + EstimateTtsPostPlayDelayMs(reply.message));
+        }
         inbound_replies_.push_back(std::move(reply));
     }
 }
@@ -1203,17 +1219,24 @@ void PlaymatePlugin::FlushRepliesToChat()
         return;
     }
 
-    std::deque<QueuedReply> replies;
-    {
-        std::lock_guard lock(queue_mutex_);
-        replies.swap(inbound_replies_);
-    }
-    for (size_t index = 0; index < replies.size(); ++index) {
-        const auto& reply = replies[index];
+    while (true) {
+        QueuedReply reply;
+        {
+            std::lock_guard lock(queue_mutex_);
+            if (inbound_replies_.empty()) {
+                return;
+            }
+            const uint64_t now = MonotonicMs();
+            if (inbound_replies_.front().not_before_ms > now) {
+                return;
+            }
+            reply = std::move(inbound_replies_.front());
+            inbound_replies_.pop_front();
+        }
         const auto persona = CurrentPersonaNameWide();
         ShowCompanionSpeechBubble(reply.message);
         QueuedTtsRequest tts_request{reply.message, reply.audio_url};
-        if (index + 1 < replies.size()) {
+        if (reply.multi_message && reply.line_count > reply.line_index) {
             tts_request.post_play_delay_ms = EstimateTtsPostPlayDelayMs(reply.message);
         }
         QueueCompanionTts(std::move(tts_request));

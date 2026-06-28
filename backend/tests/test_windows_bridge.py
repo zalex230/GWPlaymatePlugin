@@ -62,6 +62,9 @@ class _FakeReplyTable:
                             "session_id": "local-playtest",
                             "audio_url": "https://example.supabase.co/storage/v1/object/sign/playmate-tts/test.mp3",
                             "audio_mime_type": "audio/mpeg",
+                            "multi_message": True,
+                            "line_index": 1,
+                            "line_count": 2,
                         },
                     }
                 ]
@@ -175,6 +178,9 @@ class WindowsBridgeTests(unittest.TestCase):
         self.assertEqual(body["replies"], ["I hear you."])
         self.assertEqual(body["reply_items"][0]["message"], "I hear you.")
         self.assertEqual(body["reply_items"][0]["audio_mime_type"], "audio/mpeg")
+        self.assertTrue(body["reply_items"][0]["multi_message"])
+        self.assertEqual(body["reply_items"][0]["line_index"], 1)
+        self.assertEqual(body["reply_items"][0]["line_count"], 2)
         self.assertEqual(fake.reply_table.updated_ids, [10])
 
 

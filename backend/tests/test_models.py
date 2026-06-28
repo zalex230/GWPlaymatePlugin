@@ -62,6 +62,9 @@ class ModelTests(unittest.TestCase):
                 "audio_url": "https://example.supabase.co/storage/v1/object/sign/playmate-tts/test.mp3",
                 "audio_mime_type": "audio/mpeg",
                 "audio_expires_at": "2026-06-27T12:00:00+00:00",
+                "multi_message": True,
+                "line_index": 2,
+                "line_count": 2,
             },
         )
 
@@ -70,6 +73,9 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(item.message, "On it.")
         self.assertEqual(item.audio_mime_type, "audio/mpeg")
         self.assertTrue(item.audio_url.startswith("https://example.supabase.co/"))
+        self.assertTrue(item.multi_message)
+        self.assertEqual(item.line_index, 2)
+        self.assertEqual(item.line_count, 2)
 
     def test_reply_row_uses_empty_audio_fields_for_text_only_reply(self) -> None:
         row = CompanionReplyRow(

@@ -107,6 +107,9 @@ private:
             std::string audio_url;
             std::string audio_mime_type;
             std::string audio_expires_at;
+            bool multi_message = false;
+            uint32_t line_index = 0;
+            uint32_t line_count = 0;
         };
         std::vector<ReplyItem> reply_items;
     };
@@ -114,6 +117,10 @@ private:
     struct QueuedReply {
         std::wstring message;
         std::string audio_url;
+        bool multi_message = false;
+        uint32_t line_index = 0;
+        uint32_t line_count = 0;
+        uint64_t not_before_ms = 0;
     };
 
     struct QueuedTtsRequest {
@@ -226,6 +233,7 @@ private:
     std::deque<QueuedReply> inbound_replies_;
     std::deque<QueuedTtsRequest> tts_requests_;
     uint64_t next_tts_play_allowed_ms_ = 0;
+    uint64_t next_multi_reply_allowed_ms_ = 0;
 
     mutable std::mutex status_mutex_;
     std::string status_ = "Idle";

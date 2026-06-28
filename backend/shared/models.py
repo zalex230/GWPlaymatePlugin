@@ -182,6 +182,9 @@ class CompanionReplyRow(BaseModel):
             audio_url=self.payload.get("audio_url") or self.payload.get("audio_signed_url") or "",
             audio_mime_type=self.payload.get("audio_mime_type") or "",
             audio_expires_at=self.payload.get("audio_expires_at") or "",
+            multi_message=bool(self.payload.get("multi_message")),
+            line_index=int(self.payload.get("line_index") or 0),
+            line_count=int(self.payload.get("line_count") or 0),
         )
 
 
@@ -190,6 +193,9 @@ class ReplyItem(BaseModel):
     audio_url: str = ""
     audio_mime_type: str = ""
     audio_expires_at: str = ""
+    multi_message: bool = False
+    line_index: int = 0
+    line_count: int = 0
 
 
 class RepliesResponse(BaseModel):
