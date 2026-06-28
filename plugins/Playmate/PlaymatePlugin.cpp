@@ -368,9 +368,34 @@ namespace {
         if (living->login_number) {
             return WideToUtf8(GW::Agents::GetPlayerNameByLoginNumber(living->login_number));
         }
-        std::wstring decoded_name;
-        GW::Agents::AsyncGetAgentName(living, decoded_name);
-        return WideToUtf8(decoded_name.c_str());
+
+        struct DecodedAgentName {
+            std::wstring encoded;
+            wchar_t decoded[128]{};
+            bool requested = false;
+        };
+        static std::mutex cache_mutex;
+        static std::unordered_map<uint32_t, DecodedAgentName> cache;
+
+        const wchar_t* encoded_name = GW::Agents::GetAgentEncName(living);
+        if (!encoded_name || !*encoded_name) {
+            return {};
+        }
+
+        std::lock_guard lock(cache_mutex);
+        auto& entry = cache[living->agent_id];
+        if (entry.encoded != encoded_name) {
+            entry = DecodedAgentName{};
+            entry.encoded = encoded_name;
+        }
+        if (entry.decoded[0]) {
+            return WideToUtf8(entry.decoded);
+        }
+        if (!entry.requested) {
+            entry.requested = true;
+            GW::UI::AsyncDecodeStr(entry.encoded.c_str(), entry.decoded, _countof(entry.decoded));
+        }
+        return {};
     }
 
     std::string DyeItemName(const GW::Item* item)
