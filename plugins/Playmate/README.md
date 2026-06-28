@@ -13,6 +13,7 @@ Playmate currently captures:
 - map load/change events
 - quest add/detail-change events
 - periodic map and active-quest snapshots
+- NPC speech bubbles, including allied or quest NPCs traveling with the party
 - proactive environment radar alerts in explorable areas
 
 For early tuning, telemetry is written locally as JSON Lines:
@@ -33,6 +34,8 @@ The plugin can also POST events to a local companion service:
 Replies are injected locally with `GW::Chat::WriteChat`, using the active companion persona as the sender. This writes to the client chat window; it does not send a message to ArenaNet servers.
 
 When `Show companion speech bubbles` is enabled, replies also render as a local speech bubble over the active character's head. This uses the client-side speech bubble UI path and is only visible locally.
+
+NPC speech bubble capture ignores the active player character's own bubble so local companion replies do not loop back into Hermes, but allied NPCs, henchmen, and quest NPCs remain eligible dialogue sources.
 
 The Playmate panel shows the current message lifecycle: whether the last event was accepted by the local bridge, whether the companion is waiting on Hermes/LLM interpretation, and when the last reply arrived.
 

@@ -285,12 +285,21 @@ namespace {
         return std::sqrt(dx * dx + dy * dy);
     }
 
+    bool IsControlledCharacterAgent(const uint32_t agent_id)
+    {
+        if (!agent_id) {
+            return false;
+        }
+        const GW::AgentLiving* player = GW::Agents::GetControlledCharacter();
+        return player && player->agent_id == agent_id;
+    }
+
     bool IsAgentInCurrentParty(const uint32_t agent_id)
     {
         if (!agent_id) {
             return false;
         }
-        if (const GW::AgentLiving* player = GW::Agents::GetControlledCharacter(); player && player->agent_id == agent_id) {
+        if (IsControlledCharacterAgent(agent_id)) {
             return true;
         }
         const GW::PartyInfo* party = GW::PartyMgr::GetPartyInfo();
@@ -1643,7 +1652,7 @@ void PlaymatePlugin::OnPartyDefeated(GW::HookStatus*, GW::Packet::StoC::PartyDef
 
 void PlaymatePlugin::OnSpeechBubble(GW::HookStatus*, GW::Packet::StoC::SpeechBubble* packet)
 {
-    if (!active_plugin || !packet || !packet->agent_id || IsAgentInCurrentParty(packet->agent_id)) {
+    if (!active_plugin || !packet || !packet->agent_id || IsControlledCharacterAgent(packet->agent_id)) {
         return;
     }
     if (!*packet->message || LooksGwEncoded(packet->message)) {
