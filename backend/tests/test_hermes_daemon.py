@@ -23,7 +23,11 @@ from backend.hermes_daemon.daemon import (
     last_map_comment_by_session,
     map_comment_variant_by_session,
     likely_gw_wiki_question,
+    memory_event_from,
+    memory_buffers,
+    memory_last_write_at,
     model_reply_has_bad_shape,
+    persona_living_notes,
     process_event,
     recent_companion_context,
     recent_reply_texts,
@@ -39,6 +43,8 @@ class HermesDaemonTests(unittest.TestCase):
         gw_wiki_cache.clear()
         last_map_comment_by_session.clear()
         map_comment_variant_by_session.clear()
+        memory_buffers.clear()
+        memory_last_write_at.clear()
         world_state.last_spoken_at = 0
         world_state.last_interaction_timestamp = 0
         world_state.map_id = 0
@@ -571,6 +577,42 @@ class HermesDaemonTests(unittest.TestCase):
         reason = should_flush_memory_buffer(events, events[-1], last_write_at=time.time() - 40.0)
 
         self.assertEqual(reason, "event_threshold")
+
+    def test_ordinary_player_chat_does_not_become_memory(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hello",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        self.assertIsNone(memory_event_from(event, record_id=1))
+
+    def test_explicit_player_memory_becomes_relationship_note(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "remember that I like checking every hidden stash",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        memory_event = memory_event_from(event, record_id=2)
+
+        self.assertIsNotNone(memory_event)
+        assert memory_event is not None
+        self.assertEqual(memory_event["notability"], "durable_player_note")
+        reason = should_flush_memory_buffer(deque([memory_event]), memory_event, last_write_at=time.time())
+        self.assertEqual(reason, "durable_player_note")
+
+    def test_azele_persona_loads_personal_memory_doc(self) -> None:
+        notes = persona_living_notes("Azele")
+
+        self.assertIn("Personal memory notes", notes)
+        self.assertIn("About the player", notes)
 
     def test_snapshot_can_trigger_low_frequency_ambient_quip(self) -> None:
         replies = process_event(

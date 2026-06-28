@@ -73,6 +73,19 @@ python -m backend.scripts.ensure_tts_storage_bucket
 Hermes writes text-only replies if Kokoro is offline or if Storage upload/signing fails. Check those two
 services before debugging the Windows audio fallback.
 
+## Memory layers
+
+Hermes uses two memory layers:
+
+- `backend/hermes/personas/<persona>.md` and `<persona>.memory.md` are hand-curated local persona memory.
+  These files shape every reply and are best for durable relationship context, recurring jokes, preferences,
+  and the companion's lived continuity.
+- Supabase `memories` rows are only for notable play facts: explicit player memory requests/preferences,
+  important NPC dialogue, rare loot, quest or mission milestones, and close combat pressure.
+
+Routine greetings, ordinary party chat, map transitions, and generic snapshots should stay in live context,
+not durable database memory.
+
 Health check:
 
 ```bash

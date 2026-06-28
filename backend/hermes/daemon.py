@@ -122,12 +122,15 @@ MEMORY_MEANINGFUL_EVENT_TYPES = {
     "player_chat",
     "chat_log",
     "npc_speech_bubble",
-    "map_changed",
-    "map_change",
-    "map_loaded",
     "active_quest_changed",
     "environment_alert",
     "target_changed",
+    "party_member_down",
+    "party_defeated",
+    "mission_objective_completed",
+    "mission_objective_updated",
+    "vanquish_complete",
+    "vanquish_progress",
 }
 MEMORY_MAP_EVENT_TYPES = {"map_changed", "map_change", "map_loaded"}
 MEMORY_MIN_EVENTS = 6
@@ -152,6 +155,23 @@ KNOWN_PRESEARING_MAP_NAMES = {
     171: "Foible's Fair",
     172: "Fort Ranik",
 }
+DURABLE_PLAYER_MEMORY_PATTERNS = re.compile(
+    r"\b("
+    r"remember|don't forget|do not forget|important|for later|from now on|"
+    r"i prefer|i like|i love|i hate|my favorite|call me|"
+    r"we decided|we learned|we found|we discovered|we met|"
+    r"i want you to|you should know|that matters|this matters"
+    r")\b",
+    re.IGNORECASE,
+)
+NOTABLE_DISCOVERY_PATTERNS = re.compile(
+    r"\b("
+    r"rare|purple|gold|green|unique|boss|elite|tome|dye|black dye|"
+    r"completed|quest complete|reward|discovered|found|learned|met|"
+    r"rurik|devona|mhenlo|cynn|charr|northlands|catacombs"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def readable_game_text(value: Any) -> str:
@@ -271,13 +291,56 @@ def memory_event_from(event: TelemetryEvent, record_id: int | None) -> dict[str,
     if event.event_type not in MEMORY_MEANINGFUL_EVENT_TYPES:
         return None
     message = readable_game_text(event.message) or event.event_type
+    notability = ""
+
+    if event.event_type == "player_chat":
+        if DURABLE_PLAYER_MEMORY_PATTERNS.search(message):
+            notability = "durable_player_note"
+        elif NOTABLE_DISCOVERY_PATTERNS.search(message):
+            notability = "player_noted_discovery"
+        else:
+            return None
+
     if event.event_type == "chat_log" and not (
         NOTABLE_CHAT_PATTERNS.search(message) or is_npc_dialogue_event(event)
     ):
         return None
+    if event.event_type in {"chat_log", "npc_speech_bubble"}:
+        if is_npc_dialogue_event(event):
+            notability = "npc_dialogue"
+        elif NOTABLE_DISCOVERY_PATTERNS.search(message):
+            notability = "notable_game_text"
+        else:
+            return None
+    if event.event_type == "active_quest_changed" and not readable_game_text(event.active_quest_name):
+        return None
+    if event.event_type == "environment_alert" and not (
+        str(event.severity or "").upper() == "HIGH"
+        or event.alert_type in EMERGENCY_ALERT_TYPES
+        or "rare" in message.lower()
+    ):
+        return None
+    if event.event_type == "target_changed" and not (
+        readable_game_text(event.agent_name) and NOTABLE_DISCOVERY_PATTERNS.search(event.agent_name)
+    ):
+        return None
+    if not notability:
+        if event.event_type == "active_quest_changed":
+            notability = "quest_context"
+        elif event.event_type in {"party_member_down", "party_defeated"}:
+            notability = "party_danger"
+        elif event.event_type.startswith("mission_") or event.event_type.startswith("vanquish_"):
+            notability = "mission_progress"
+        elif event.event_type == "environment_alert":
+            notability = "combat_pressure"
+        elif event.event_type == "target_changed":
+            notability = "notable_target"
+        else:
+            notability = "notable_event"
     return {
         "record_id": record_id,
         "event_type": event.event_type,
+        "notability": notability,
         "message": message,
         "map_id": event.map_id or None,
         "map_name": readable_game_text(getattr(event, "map_name", "")),
@@ -307,6 +370,7 @@ def memory_tags_for(events: list[dict[str, Any]], rare_items: list[str]) -> list
     tags: set[str] = set()
     for event in events:
         event_type = event.get("event_type")
+        notability = event.get("notability")
         if event_type in MEMORY_MAP_EVENT_TYPES:
             tags.add("map_change")
         if event_type == "active_quest_changed" or event.get("active_quest_id"):
@@ -315,6 +379,16 @@ def memory_tags_for(events: list[dict[str, Any]], rare_items: list[str]) -> list
             tags.add("combat")
         if event_type == "player_chat":
             tags.add("player_chat")
+        if notability == "durable_player_note":
+            tags.add("relationship")
+            tags.add("player_preference")
+        if notability == "player_noted_discovery":
+            tags.add("discovery")
+        if notability == "npc_dialogue":
+            tags.add("npc_dialogue")
+            tags.add("world_lore")
+        if notability == "mission_progress":
+            tags.add("mission")
         if event_type == "target_changed":
             tags.add("target")
     if rare_items:
@@ -325,6 +399,10 @@ def memory_tags_for(events: list[dict[str, Any]], rare_items: list[str]) -> list
 
 def memory_type_for(tags: list[str], reason: str) -> str:
     tag_set = set(tags)
+    if "player_preference" in tag_set or "relationship" in tag_set:
+        return "relationship_note"
+    if "npc_dialogue" in tag_set:
+        return "npc_dialogue"
     if "rare_item" in tag_set and len(tag_set) <= 3:
         return "rare_item"
     if reason == "high_urgency_alert" or "combat" in tag_set:
@@ -353,30 +431,39 @@ def summarize_memory_events(
     source_ids = [event.get("record_id") for event in events if isinstance(event.get("record_id"), int)]
     event_types = [str(event.get("event_type")) for event in events]
     unique_event_types = list(dict.fromkeys(event_types))
+    notabilities = [str(event.get("notability") or "") for event in events if event.get("notability")]
 
     pieces: list[str] = []
-    map_labels = [memory_map_label(event) for event in events if memory_map_label(event)]
-    if map_labels:
-        unique_maps = list(dict.fromkeys(map_labels))
-        if len(unique_maps) > 1:
-            pieces.append(f"{character_name} moved through {', '.join(unique_maps[-4:])}.")
-        else:
-            pieces.append(f"{character_name} spent time in {unique_maps[-1]}.")
+    durable_player_messages = [
+        str(event.get("message"))
+        for event in events
+        if event.get("notability") in {"durable_player_note", "player_noted_discovery"} and event.get("message")
+    ]
+    npc_lines = [
+        (str(event.get("sender") or "NPC"), str(event.get("message")))
+        for event in events
+        if event.get("notability") == "npc_dialogue" and event.get("message")
+    ]
+
+    if durable_player_messages:
+        pieces.append(f"the player told {character_name}: \"{durable_player_messages[-1]}\".")
+        if len(durable_player_messages) > 1:
+            pieces.append("Related player notes: " + " / ".join(durable_player_messages[-3:-1]) + ".")
+    elif npc_lines:
+        sender, line = npc_lines[-1]
+        pieces.append(f"{character_name} heard {sender}: \"{line}\".")
     else:
-        pieces.append(f"{character_name} continued the session.")
+        map_labels = [memory_map_label(event) for event in events if memory_map_label(event)]
+        if map_labels:
+            unique_maps = list(dict.fromkeys(map_labels))
+            pieces.append(f"{character_name} was in {unique_maps[-1]}.")
+        else:
+            pieces.append(f"{character_name} registered a notable play moment.")
 
     quest_names = [event.get("active_quest_name") for event in events if event.get("active_quest_name")]
     if active_quest_id or quest_names:
         quest_label = quest_names[-1] if quest_names else f"quest {active_quest_id}"
-        pieces.append(f"Quest context centered on {quest_label}.")
-
-    player_messages = [
-        str(event.get("message"))
-        for event in events
-        if event.get("event_type") == "player_chat" and event.get("message")
-    ]
-    if player_messages:
-        pieces.append(f"Player said: {' / '.join(player_messages[-3:])}.")
+        pieces.append(f"Quest context: {quest_label}.")
 
     if "combat" in tags:
         alert_messages = [
@@ -394,8 +481,10 @@ def summarize_memory_events(
 
     summary = " ".join(pieces)
     title_bits = []
-    if "map_change" in tags:
-        title_bits.append("map movement")
+    if "relationship" in tags:
+        title_bits.append("relationship note")
+    if "npc_dialogue" in tags:
+        title_bits.append("NPC dialogue")
     if "quest_progress" in tags:
         title_bits.append("quest progress")
     if "combat" in tags:
@@ -419,6 +508,7 @@ def summarize_memory_events(
         metadata={
             "event_count": len(events),
             "event_types": unique_event_types,
+            "notability": list(dict.fromkeys(notabilities)),
             "flush_reason": reason,
             "source": "hermes_memory_writer",
         },
@@ -433,6 +523,16 @@ def insert_memory(memory: MemoryInsert) -> None:
 
 
 def should_flush_memory_buffer(events: deque[dict[str, Any]], new_event: dict[str, Any], *, last_write_at: float) -> str | None:
+    if new_event.get("notability") in {
+        "durable_player_note",
+        "player_noted_discovery",
+        "npc_dialogue",
+        "party_danger",
+        "mission_progress",
+    }:
+        return str(new_event.get("notability"))
+    if new_event.get("notability") == "combat_pressure" and str(new_event.get("severity") or "").upper() == "HIGH":
+        return "high_urgency_alert"
     if len(events) >= MEMORY_MAX_EVENTS:
         return "max_events"
     seconds_since_write = time.time() - last_write_at
@@ -462,7 +562,14 @@ def flush_memory_buffer(
 ) -> MemoryInsert | None:
     with memory_lock:
         events = list(memory_buffers.get(key) or [])
-        if not events or len(events) < 3:
+        if not events or (len(events) < 3 and not force and reason not in {
+            "durable_player_note",
+            "player_noted_discovery",
+            "npc_dialogue",
+            "party_danger",
+            "mission_progress",
+            "high_urgency_alert",
+        }):
             return None
         memory_buffers[key] = deque(maxlen=MEMORY_MAX_EVENTS)
         memory_last_write_at[key] = time.time()
@@ -787,16 +894,22 @@ def persona_living_notes(persona: str) -> str:
     slug = re.sub(r"[^a-z0-9_-]+", "-", persona.strip().lower()).strip("-")
     if not slug:
         return ""
-    path = PERSONA_MEMORY_DIR / f"{slug}.md"
-    try:
-        notes = path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
+    sections: list[str] = []
+    for path, heading in (
+        (PERSONA_MEMORY_DIR / f"{slug}.md", "Living character notes"),
+        (PERSONA_MEMORY_DIR / f"{slug}.memory.md", "Personal memory notes"),
+    ):
+        try:
+            notes = path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+        if notes:
+            sections.append(f"{heading}:\n{notes}")
+    if not sections:
         return ""
-    except OSError:
-        return ""
-    if not notes:
-        return ""
-    return f"\n\nLiving character notes from recent play:\n{notes}"
+    return "\n\n" + "\n\n".join(sections)
 
 
 def persona_profile(persona: str) -> str:
