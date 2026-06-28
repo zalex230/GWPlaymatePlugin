@@ -4,6 +4,7 @@ import asyncio
 import atexit
 import hashlib
 import json
+import os
 import re
 import time
 import urllib.parse
@@ -516,6 +517,8 @@ def summarize_memory_events(
 
 
 def insert_memory(memory: MemoryInsert) -> None:
+    if os.environ.get("GWPLAYMATE_DISABLE_MEMORY_WRITES") == "1":
+        return
     if not _supabase_configured():
         return
     client = create_supabase_client(settings)
@@ -618,7 +621,16 @@ def flush_all_memory_buffers() -> None:
         flush_memory_buffer(key, reason="shutdown", force=True)
 
 
-def fetch_recent_memories(character_name: str, *, limit: int = 5) -> list[MemoryRow]:
+PROMPT_MEMORY_TYPES = {
+    "relationship_note",
+    "npc_dialogue",
+    "rare_item",
+    "combat_note",
+    "quest_progress",
+}
+
+
+def fetch_recent_memories(character_name: str, *, limit: int = 12) -> list[MemoryRow]:
     if not _supabase_configured() or not character_name.strip():
         return []
     try:
@@ -631,7 +643,7 @@ def fetch_recent_memories(character_name: str, *, limit: int = 5) -> list[Memory
             .limit(limit)
             .execute()
         )
-        return [MemoryRow.model_validate(row) for row in response.data or []]
+        return prompt_relevant_memories([MemoryRow.model_validate(row) for row in response.data or []], limit=5)
     except Exception as exc:
         print(f"Hermes memory retrieval failed ({type(exc).__name__}).", flush=True)
         return []
@@ -642,6 +654,25 @@ def sanitize_memory_for_prompt(text: str) -> str:
     cleaned = re.sub(r"\bmaps?\s+\d+(?:\s*,\s*\d+)*\b", "areas", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bmap_id\s*[=:]\s*\d+\b", "map unknown", cleaned, flags=re.IGNORECASE)
     return cleaned
+
+
+def prompt_relevant_memories(memories: list[MemoryRow], *, limit: int = 5) -> list[MemoryRow]:
+    relevant: list[MemoryRow] = []
+    for memory in memories:
+        notability = [str(item) for item in memory.metadata.get("notability") or []]
+        if memory.memory_type not in PROMPT_MEMORY_TYPES and not notability:
+            continue
+        if memory.memory_type == "session_summary" and not notability:
+            continue
+        summary = sanitize_memory_for_prompt(memory.summary_text).lower()
+        if not summary or summary in {"unknown character continued the session.", "azele continued the session."}:
+            continue
+        if "moved through" in summary and not notability:
+            continue
+        relevant.append(memory)
+        if len(relevant) >= limit:
+            break
+    return relevant
 
 
 def relevant_memory_context(character_name: str) -> str:
@@ -1208,6 +1239,10 @@ def ambient_quip(event: TelemetryEvent) -> str:
 def ambient_heartbeat_reply(now: float | None = None) -> CompanionReplyInsert | None:
     checked_at = now if now is not None else time.time()
     with world_state_lock:
+        if world_state.persona.strip().lower() in {"", "unknown character", "system"}:
+            return None
+        if world_state.persona.strip().lower() != "azele":
+            return None
         if not map_display_name(world_state):
             return None
         if checked_at - world_state.last_interaction_timestamp > AMBIENT_HEARTBEAT_ACTIVITY_SECONDS:

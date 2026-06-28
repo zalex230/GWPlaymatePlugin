@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timedelta, timezone
+import os
 import time
 import unittest
+
+os.environ["GWPLAYMATE_DISABLE_MEMORY_WRITES"] = "1"
 
 import backend.hermes.daemon as hermes_daemon
 from backend.hermes_daemon.daemon import (
@@ -28,6 +31,7 @@ from backend.hermes_daemon.daemon import (
     memory_last_write_at,
     model_reply_has_bad_shape,
     persona_living_notes,
+    prompt_relevant_memories,
     process_event,
     recent_companion_context,
     recent_reply_texts,
@@ -39,6 +43,8 @@ from backend.hermes_daemon.daemon import (
 
 class HermesDaemonTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._original_insert_memory = hermes_daemon.insert_memory
+        hermes_daemon.insert_memory = lambda memory: None
         recent_reply_texts.clear()
         gw_wiki_cache.clear()
         last_map_comment_by_session.clear()
@@ -47,11 +53,18 @@ class HermesDaemonTests(unittest.TestCase):
         memory_last_write_at.clear()
         world_state.last_spoken_at = 0
         world_state.last_interaction_timestamp = 0
+        world_state.persona = "Unknown Character"
+        world_state.session_id = "local-playtest"
         world_state.map_id = 0
         world_state.map_name = ""
         world_state.close_hostile_count = 0
         world_state.recent_chat_history.clear()
         world_state.recent_alerts.clear()
+
+    def tearDown(self) -> None:
+        hermes_daemon.insert_memory = self._original_insert_memory
+        memory_buffers.clear()
+        memory_last_write_at.clear()
 
     def test_event_from_game_log_uses_metadata(self) -> None:
         event = event_from_game_log(
@@ -613,6 +626,38 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertIn("Personal memory notes", notes)
         self.assertIn("About the player", notes)
+        self.assertIn("listen to the current exchange first", notes)
+
+    def test_prompt_memory_filter_skips_noisy_legacy_session_summaries(self) -> None:
+        memories = [
+            hermes_daemon.MemoryRow(
+                character_name="Azele",
+                memory_type="session_summary",
+                title="Azele session: map movement, quest progress",
+                summary_text="Azele moved through Ascalon City, The Northlands.",
+                metadata={"source": "hermes_memory_writer"},
+            ),
+            hermes_daemon.MemoryRow(
+                character_name="Azele",
+                memory_type="relationship_note",
+                title="Azele session: relationship note",
+                summary_text='the player told Azele: "remember that I like checking every hidden stash".',
+                tags=["relationship", "player_preference"],
+                metadata={"notability": ["durable_player_note"], "source": "hermes_memory_writer"},
+            ),
+            hermes_daemon.MemoryRow(
+                character_name="Azele",
+                memory_type="session_summary",
+                title="Azele session: play notes",
+                summary_text="Azele continued the session.",
+                metadata={},
+            ),
+        ]
+
+        filtered = prompt_relevant_memories(memories)
+
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].memory_type, "relationship_note")
 
     def test_snapshot_can_trigger_low_frequency_ambient_quip(self) -> None:
         replies = process_event(
@@ -682,6 +727,17 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(reply.urgency, "LOW")
         self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
         self.assertIsNone(second)
+
+    def test_ambient_heartbeat_ignores_unknown_persona(self) -> None:
+        now = time.time()
+        world_state.persona = "Unknown Character"
+        world_state.session_id = "ambient-heartbeat"
+        world_state.map_id = 148
+        world_state.map_name = "Ascalon City"
+        world_state.last_interaction_timestamp = now
+        world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
+
+        self.assertIsNone(ambient_heartbeat_reply(now=now))
 
     def test_reply_can_include_trigger_log_id(self) -> None:
         decision = fallback_rule_decision(
