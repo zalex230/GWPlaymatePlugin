@@ -50,6 +50,7 @@ VISIBLE_ENEMY_RANGE = 900.0
 AMBIENT_QUIP_MIN_SECONDS = 85.0
 AMBIENT_HEARTBEAT_POLL_SECONDS = 10.0
 AMBIENT_HEARTBEAT_ACTIVITY_SECONDS = 600.0
+UNCONSUMED_REPLY_STALE_SECONDS = 300.0
 PERSONA_MEMORY_DIR = Path(__file__).with_name("personas")
 GW_WIKI_API_URL = "https://wiki.guildwars.com/api.php"
 GW_WIKI_PAGE_URL = "https://wiki.guildwars.com/wiki/{title}"
@@ -2306,6 +2307,73 @@ def insert_reply(reply: CompanionReplyInsert, *, consumed: bool = False) -> None
     client.table(COMPANION_REPLIES_TABLE).insert(row).execute()
 
 
+def _parse_created_at(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def expire_stale_unconsumed_replies(*, stale_seconds: float = UNCONSUMED_REPLY_STALE_SECONDS) -> int:
+    if not _supabase_configured():
+        return 0
+    client = create_supabase_client(settings)
+    response = (
+        client.table(COMPANION_REPLIES_TABLE)
+        .select("id,created_at,payload")
+        .is_("consumed_at", "null")
+        .order("created_at", desc=False)
+        .limit(100)
+        .execute()
+    )
+    now = datetime.now(timezone.utc)
+    expired_ids: list[int] = []
+    for row in response.data or []:
+        row_id = row.get("id")
+        created_at = _parse_created_at(row.get("created_at"))
+        if not isinstance(row_id, int) or not created_at:
+            continue
+        age = (now - created_at).total_seconds()
+        if age >= stale_seconds:
+            expired_ids.append(row_id)
+    if not expired_ids:
+        return 0
+    client.table(COMPANION_REPLIES_TABLE).update({"consumed_at": utc_now_iso()}).in_("id", expired_ids).execute()
+    return len(expired_ids)
+
+
+def has_unconsumed_ambient_reply(persona: str, session_id: str) -> bool:
+    if not _supabase_configured():
+        return False
+    client = create_supabase_client(settings)
+    response = (
+        client.table(COMPANION_REPLIES_TABLE)
+        .select("id,payload")
+        .eq("persona", persona)
+        .is_("consumed_at", "null")
+        .order("created_at", desc=True)
+        .limit(25)
+        .execute()
+    )
+    for row in response.data or []:
+        payload = row.get("payload") or {}
+        if payload.get("trigger") == "ambient_heartbeat" and payload.get("session_id") == session_id:
+            return True
+    return False
+
+
+def ambient_identity() -> tuple[str, str] | None:
+    with world_state_lock:
+        persona = world_state.persona.strip()
+        if persona.lower() in {"", "unknown character", "system"}:
+            return None
+        return persona, world_state.session_id
+
+
 def reply_exists_for_log(log_id: int) -> bool:
     if not _supabase_configured():
         return False
@@ -2551,10 +2619,16 @@ async def ambient_heartbeat_loop() -> None:
     print("GWPlaymate Hermes ambient heartbeat enabled.", flush=True)
     while True:
         try:
-            reply = ambient_heartbeat_reply() if _supabase_configured() else None
-            if reply:
-                await asyncio.to_thread(insert_reply, reply)
-                print(f"Hermes ambient quip inserted for {reply.persona}: {reply.message}", flush=True)
+            expired = await asyncio.to_thread(expire_stale_unconsumed_replies)
+            if expired:
+                print(f"Hermes expired {expired} stale unconsumed companion replies.", flush=True)
+            identity = ambient_identity() if _supabase_configured() else None
+            if identity:
+                pending = await asyncio.to_thread(has_unconsumed_ambient_reply, identity[0], identity[1])
+                reply = None if pending else ambient_heartbeat_reply()
+                if reply:
+                    await asyncio.to_thread(insert_reply, reply)
+                    print(f"Hermes ambient quip inserted for {reply.persona}: {reply.message}", flush=True)
         except Exception as exc:
             print(f"GWPlaymate Hermes ambient heartbeat error: {type(exc).__name__}.", flush=True)
         await asyncio.sleep(AMBIENT_HEARTBEAT_POLL_SECONDS)

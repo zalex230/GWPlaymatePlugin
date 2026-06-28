@@ -14,6 +14,7 @@ from backend.hermes_daemon.daemon import (
     LOW_QUALITY_REPLY_PATTERNS,
     AMBIENT_HEARTBEAT_ACTIVITY_SECONDS,
     AMBIENT_QUIP_MIN_SECONDS,
+    ambient_identity,
     ambient_heartbeat_reply,
     build_character_reply_prompt,
     event_from_environment_alert,
@@ -738,6 +739,22 @@ class HermesDaemonTests(unittest.TestCase):
         world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
 
         self.assertIsNone(ambient_heartbeat_reply(now=now))
+
+    def test_ambient_identity_ignores_unknown_persona_before_pending_check(self) -> None:
+        world_state.persona = "Unknown Character"
+        world_state.session_id = "ambient-heartbeat"
+
+        self.assertIsNone(ambient_identity())
+
+        world_state.persona = "Azele"
+        self.assertEqual(ambient_identity(), ("Azele", "ambient-heartbeat"))
+
+    def test_parse_created_at_handles_supabase_timestamps(self) -> None:
+        parsed = hermes_daemon._parse_created_at("2026-06-28T11:49:35.509257+00:00")
+
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.tzinfo, timezone.utc)
 
     def test_reply_can_include_trigger_log_id(self) -> None:
         decision = fallback_rule_decision(
