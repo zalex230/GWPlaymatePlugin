@@ -738,6 +738,7 @@ void PlaymatePlugin::RegisterHooks()
     GW::UI::RegisterUIMessageCallback(&world_event_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnMapOrQuestEvent, 0x8000);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentState>(&stoc_event_entry_, OnAgentState, 0x8000);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::PartyDefeated>(&stoc_event_entry_, OnPartyDefeated, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::SpeechBubble>(&stoc_event_entry_, OnSpeechBubble, 0x8000);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::ObjectiveAdd>(&stoc_event_entry_, OnObjectiveAdd, 0x8000);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::ObjectiveDone>(&stoc_event_entry_, OnObjectiveDone, 0x8000);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::ObjectiveUpdateName>(&stoc_event_entry_, OnObjectiveUpdateName, 0x8000);
@@ -1637,6 +1638,29 @@ void PlaymatePlugin::OnPartyDefeated(GW::HookStatus*, GW::Packet::StoC::PartyDef
     event.message = "The party was defeated.";
     event.alert_type = event.event_type;
     event.severity = "HIGH";
+    active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnSpeechBubble(GW::HookStatus*, GW::Packet::StoC::SpeechBubble* packet)
+{
+    if (!active_plugin || !packet || !packet->agent_id || IsAgentInCurrentParty(packet->agent_id)) {
+        return;
+    }
+    if (!*packet->message || LooksGwEncoded(packet->message)) {
+        return;
+    }
+
+    const auto cleaned = FilterChatLogMessage(GW::Chat::CHANNEL_ALL, packet->message);
+    if (!cleaned) {
+        return;
+    }
+
+    TelemetryEvent event;
+    event.event_type = "npc_speech_bubble";
+    event.sender = std::format("Agent {}", packet->agent_id);
+    event.channel = "local";
+    event.message = *cleaned;
+    event.agent_id = packet->agent_id;
     active_plugin->QueueGameplayEvent(std::move(event));
 }
 

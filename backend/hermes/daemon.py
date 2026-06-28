@@ -11,7 +11,7 @@ import urllib.request
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Lock, RLock
 from typing import Any
 
 from supabase import acreate_client
@@ -36,7 +36,7 @@ from backend.shared.supabase_client import create_supabase_client, require_supab
 settings = load_settings()
 DAEMON_STARTED_AT = datetime.now(timezone.utc)
 app = FastAPI(title="GWPlaymate Hermes", version="0.1.0")
-world_state_lock = Lock()
+world_state_lock = RLock()
 world_state = LiveWorldState(
     recent_chat_limit=settings.recent_chat_limit,
     recent_alert_limit=settings.recent_alert_limit,
@@ -46,6 +46,7 @@ recent_reply_texts: deque[str] = deque(maxlen=12)
 map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
 VISIBLE_ENEMY_RANGE = 900.0
+AMBIENT_QUIP_MIN_SECONDS = 85.0
 PERSONA_MEMORY_DIR = Path(__file__).with_name("personas")
 GW_WIKI_API_URL = "https://wiki.guildwars.com/api.php"
 GW_WIKI_PAGE_URL = "https://wiki.guildwars.com/wiki/{title}"
@@ -65,6 +66,7 @@ PROACTIVE_EVENT_TYPES = {
     "map_changed",
     "map_change",
     "map_loaded",
+    "snapshot",
 }
 SPEAKING_ENVIRONMENT_ALERT_TYPES = {"under_attack", "danger_spike", "party_member_down", "combat_started"}
 EMERGENCY_ALERT_TYPES = {"under_attack", "party_member_down", "combat_started"}
@@ -117,6 +119,7 @@ DANGLING_REPLY_ENDING_PATTERN = re.compile(
 MEMORY_MEANINGFUL_EVENT_TYPES = {
     "player_chat",
     "chat_log",
+    "npc_speech_bubble",
     "map_changed",
     "map_change",
     "map_loaded",
@@ -125,9 +128,9 @@ MEMORY_MEANINGFUL_EVENT_TYPES = {
     "target_changed",
 }
 MEMORY_MAP_EVENT_TYPES = {"map_changed", "map_change", "map_loaded"}
-MEMORY_MIN_EVENTS = 10
-MEMORY_MAX_EVENTS = 20
-MEMORY_MIN_SECONDS = 60.0
+MEMORY_MIN_EVENTS = 6
+MEMORY_MAX_EVENTS = 12
+MEMORY_MIN_SECONDS = 35.0
 memory_buffers: dict[tuple[str, str], deque[dict[str, Any]]] = {}
 memory_last_write_at: dict[tuple[str, str], float] = {}
 memory_lock = Lock()
@@ -471,6 +474,9 @@ def flush_memory_buffer(
             f"Hermes memory written for {key[0]} ({memory.memory_type}, {len(events)} events, reason={reason}).",
             flush=True,
         )
+        with world_state_lock:
+            if memory_key(world_state.persona, world_state.session_id) == key:
+                world_state.compact_after_memory_flush()
     except Exception as exc:
         print(f"Hermes memory insert failed ({type(exc).__name__}).", flush=True)
         with memory_lock:
@@ -756,6 +762,13 @@ def gw_wiki_context(event: TelemetryEvent) -> str:
 
 
 def is_npc_dialogue_event(event: TelemetryEvent) -> bool:
+    if event.event_type == "npc_speech_bubble":
+        message = readable_game_text(event.message)
+        if len(message) < 8 or len(message) > 220:
+            return False
+        if NPC_DIALOGUE_IGNORE_PATTERNS.search(message):
+            return False
+        return bool(re.search(r"[A-Za-z]{3,}", message))
     if event.event_type != "chat_log":
         return False
     if event.channel not in NPC_DIALOGUE_CHANNELS:
@@ -997,6 +1010,84 @@ def rotating_map_comment(event: TelemetryEvent) -> str:
     selected_index = variants.index(choice) if choice in variants else start
     map_comment_variant_by_session[key] = selected_index + 1
     return choice
+
+
+AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
+    "ascalon city": [
+        "City air helps. I can think here, at least.",
+        "I keep recognizing faces here. That is comforting and annoying.",
+        "If we stay too long, I’m going to start fussing with my hair.",
+    ],
+    "lakeside county": [
+        "Lakeside is too pretty for how much trouble finds it.",
+        "I used to think these roads were huge. Funny, right?",
+        "The water makes everything sound calmer than it is.",
+    ],
+    "ashford abbey": [
+        "Ashford always feels like someone is about to assign homework.",
+        "The Abbey is quiet enough to make me suspicious.",
+        "I know, I know. Behave near the Abbey. Mostly.",
+    ],
+    "regent valley": [
+        "Open ground like this makes me watch the ridges.",
+        "Regent Valley looks peaceful until it isn't.",
+        "If anything jumps us out here, I’m blaming the scenery.",
+    ],
+    "the northlands": [
+        "Past the Wall, I’m keeping my hands warm for a reason.",
+        "If Charr show, we do not hesitate.",
+        "I’m alert. Don’t make a thing of it.",
+    ],
+    "green hills county": [
+        "Green Hills does make a good view. I’ll give it that.",
+        "I am not ruining these boots for nothing, just saying.",
+        "Pretty fields, suspicious roads. Perfectly normal.",
+    ],
+    "wizard's folly": [
+        "Still cold. Still rude about it.",
+        "My fingers remember this place before I do.",
+        "If I start showing off with fire, pretend you are impressed.",
+    ],
+    "foible's fair": [
+        "Foible's Fair always feels like a pause before trouble.",
+        "Small place. Easy to underestimate. I would know.",
+        "This stop is useful. Tiny, but useful.",
+    ],
+    "the catacombs": [
+        "I hate how quiet it gets down here.",
+        "If something whispers, we are leaving. Or burning it.",
+        "Catacombs make even my thoughts sound dramatic.",
+    ],
+    "fort ranik": [
+        "Ranik has that soldier-stiff feeling again.",
+        "Everyone here stands like posture is a weapon.",
+        "I can behave around soldiers. Briefly.",
+    ],
+}
+
+
+def is_ambient_snapshot_event(event: TelemetryEvent) -> bool:
+    if event.event_type != "snapshot":
+        return False
+    if not map_display_name(event):
+        return False
+    if event.close_hostile_count > 0 or event.alert_type in EMERGENCY_ALERT_TYPES:
+        return False
+    return True
+
+
+def ambient_quip(event: TelemetryEvent) -> str:
+    map_name = map_display_name(event).lower()
+    for name, variants in AMBIENT_QUIP_VARIANTS.items():
+        if name in map_name:
+            return first_fresh_reply(variants)
+    return first_fresh_reply(
+        [
+            "Still with you. Just watching the edges.",
+            "Quiet moment. Suspicious, but I’ll take it.",
+            "I’m here. Thinking, unfortunately.",
+        ]
+    )
 
 
 def build_character_reply_prompt(event: TelemetryEvent) -> str:
@@ -1343,6 +1434,8 @@ def should_consider_speaking_for_event(event: TelemetryEvent) -> bool:
         NOTABLE_CHAT_PATTERNS.search(event.message or "") or is_npc_dialogue_event(event)
     ):
         return True
+    if is_ambient_snapshot_event(event):
+        return True
     return False
 
 
@@ -1640,6 +1733,13 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
             channel_override="CHANNEL_PARTY",
             urgency="LOW",
             response=clamp_gw_chat_line(azele_npc_dialogue_reply(event)),
+        )
+    if is_ambient_snapshot_event(event):
+        return HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="LOW",
+            response=clamp_gw_chat_line(ambient_quip(event)),
         )
     if event.event_type == "party_member_down":
         name = readable_game_text(getattr(event, "agent_name", ""))
@@ -2064,6 +2164,8 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
             required_cooldown = 6.0
         elif is_npc_dialogue_event(event):
             required_cooldown = 14.0
+        elif is_ambient_snapshot_event(event):
+            required_cooldown = AMBIENT_QUIP_MIN_SECONDS
         else:
             required_cooldown = settings.hermes_min_speak_seconds
         if not is_map_entry and not is_direct_player_chat and not world_state.can_speak(required_cooldown):

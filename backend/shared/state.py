@@ -62,9 +62,27 @@ class LiveWorldState:
     def mark_spoken(self) -> None:
         self.last_spoken_at = time.time()
 
+    def compact_after_memory_flush(self) -> None:
+        while len(self.recent_chat_history) > max(3, self.recent_chat_limit // 2):
+            self.recent_chat_history.popleft()
+        while len(self.recent_alerts) > max(3, self.recent_alert_limit // 2):
+            self.recent_alerts.popleft()
+
     def prompt_context(self) -> str:
-        chat = "\n".join(self.recent_chat_history) or "None"
-        alerts = "\n".join(str(alert) for alert in self.recent_alerts) or "None"
+        chat_lines = list(self.recent_chat_history)[-6:]
+        chat = "\n".join(chat_lines) or "None"
+        alert_lines: list[str] = []
+        for alert in list(self.recent_alerts)[-5:]:
+            event_type = alert.get("alert_type") or alert.get("event_type") or "event"
+            message = alert.get("message") or alert.get("agent_name") or ""
+            hostiles = alert.get("close_hostile_count") or alert.get("hostile_count") or 0
+            if message and hostiles:
+                alert_lines.append(f"{event_type}: {message} ({hostiles} hostiles)")
+            elif message:
+                alert_lines.append(f"{event_type}: {message}")
+            else:
+                alert_lines.append(str(event_type))
+        alerts = "\n".join(alert_lines) or "None"
         return (
             f"Persona: {self.persona}\n"
             f"Map: {self.map_name or 'Unknown'} ({self.map_id})\n"

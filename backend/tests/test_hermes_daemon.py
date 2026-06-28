@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime, timedelta, timezone
+import time
 import unittest
 
 import backend.hermes.daemon as hermes_daemon
@@ -21,6 +23,7 @@ from backend.hermes_daemon.daemon import (
     model_reply_has_bad_shape,
     process_event,
     recent_reply_texts,
+    should_flush_memory_buffer,
     should_use_ollama_for_event,
     world_state,
 )
@@ -33,6 +36,8 @@ class HermesDaemonTests(unittest.TestCase):
         last_map_comment_by_session.clear()
         map_comment_variant_by_session.clear()
         world_state.last_spoken_at = 0
+        world_state.recent_chat_history.clear()
+        world_state.recent_alerts.clear()
 
     def test_event_from_game_log_uses_metadata(self) -> None:
         event = event_from_game_log(
@@ -468,6 +473,89 @@ class HermesDaemonTests(unittest.TestCase):
         )
 
         self.assertEqual([reply.message for reply in replies], ["See? Not just me being dramatic. We should be ready."])
+
+    def test_overhead_npc_speech_bubble_can_trigger_azele_aside(self) -> None:
+        replies = process_event(
+            event_from_game_log(
+                {
+                    "sender": "Agent 123",
+                    "channel": "local",
+                    "message": "Please, someone help us before more Charr come.",
+                    "payload": {
+                        "event_type": "npc_speech_bubble",
+                        "persona": "Azele",
+                        "session_id": "npc-bubble",
+                        "map_id": 148,
+                        "agent_id": 123,
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+
+        self.assertEqual([reply.message for reply in replies], ["See? Not just me being dramatic. We should be ready."])
+
+    def test_memory_flush_threshold_is_more_frequent(self) -> None:
+        events = deque(
+            {
+                "event_type": "player_chat",
+                "message": f"line {index}",
+            }
+            for index in range(6)
+        )
+
+        reason = should_flush_memory_buffer(events, events[-1], last_write_at=time.time() - 40.0)
+
+        self.assertEqual(reason, "event_threshold")
+
+    def test_snapshot_can_trigger_low_frequency_ambient_quip(self) -> None:
+        replies = process_event(
+            event_from_game_log(
+                {
+                    "sender": "System",
+                    "channel": "system",
+                    "message": "snapshot",
+                    "metadata": {
+                        "event_type": "snapshot",
+                        "persona": "Azele",
+                        "session_id": "ambient-test",
+                        "map_id": 148,
+                        "map_name": "Ascalon City",
+                        "close_hostile_count": 0,
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+
+        self.assertEqual(len(replies), 1)
+        self.assertIn(replies[0].message, {
+            "City air helps. I can think here, at least.",
+            "I keep recognizing faces here. That is comforting and annoying.",
+            "If we stay too long, I’m going to start fussing with my hair.",
+        })
+
+    def test_snapshot_ambient_quip_respects_cooldown(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "System",
+                "channel": "system",
+                "message": "snapshot",
+                "metadata": {
+                    "event_type": "snapshot",
+                    "persona": "Azele",
+                    "session_id": "ambient-test",
+                    "map_id": 148,
+                    "map_name": "Ascalon City",
+                },
+            }
+        )
+
+        first = process_event(event, use_ollama=False)
+        second = process_event(event, use_ollama=False)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
 
     def test_reply_can_include_trigger_log_id(self) -> None:
         decision = fallback_rule_decision(

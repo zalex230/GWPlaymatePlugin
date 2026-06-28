@@ -26,6 +26,7 @@ namespace GW::Packet::StoC {
     struct ObjectiveDone;
     struct ObjectiveUpdateName;
     struct PartyDefeated;
+    struct SpeechBubble;
     struct UpdateMissionProgress;
     struct VanquishComplete;
     struct VanquishProgress;
@@ -178,6 +179,7 @@ private:
     static void OnMapOrQuestEvent(GW::HookStatus* status, GW::UI::UIMessage message_id, void* wparam, void* lparam);
     static void OnAgentState(GW::HookStatus* status, GW::Packet::StoC::AgentState* packet);
     static void OnPartyDefeated(GW::HookStatus* status, GW::Packet::StoC::PartyDefeated* packet);
+    static void OnSpeechBubble(GW::HookStatus* status, GW::Packet::StoC::SpeechBubble* packet);
     static void OnObjectiveAdd(GW::HookStatus* status, GW::Packet::StoC::ObjectiveAdd* packet);
     static void OnObjectiveDone(GW::HookStatus* status, GW::Packet::StoC::ObjectiveDone* packet);
     static void OnObjectiveUpdateName(GW::HookStatus* status, GW::Packet::StoC::ObjectiveUpdateName* packet);
