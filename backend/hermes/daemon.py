@@ -2122,7 +2122,13 @@ def character_reply_with_ollama(event: TelemetryEvent) -> HermesDecision:
         f"(model={settings.ollama_model}, ctx={settings.ollama_num_ctx}, predict={settings.ollama_num_predict}).",
         flush=True,
     )
-    reply = validate_model_reply(clean_model_reply(response), event)
+    cleaned = clean_model_reply(response)
+    try:
+        reply = validate_model_reply(cleaned, event)
+    except Exception as exc:
+        preview = clamp_gw_chat_line(cleaned)[:160]
+        print(f"Ollama character reply rejected ({type(exc).__name__}: {exc}): {preview!r}", flush=True)
+        raise
     return HermesDecision(
         should_speak=True,
         channel_override="CHANNEL_PARTY",
@@ -2352,6 +2358,30 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "Good. Clear the bags first, then we move cleaner.",
                 "That makes sense. Less rummaging while something is trying to kill us.",
                 "Practical. I like it when preparation saves us embarrassment later.",
+            ]
+        )
+    if re.search(r"\b(stage|althea|iris|irises|flower|flowers)\b", message):
+        if "stage" in message or "althea" in message:
+            return first_fresh_reply(
+                [
+                    "Althea's stage, right. Good eye. Let's check around it.",
+                    "Yeah, her stage is a sensible place to look. Pretty enough for irises.",
+                    "That tracks. If an iris is hiding there, I want credit for agreeing.",
+                ]
+            )
+        return first_fresh_reply(
+            [
+                "Red irises, then. Let's sweep the pretty spots first.",
+                "Flowers first. Very heroic, obviously, but useful.",
+                "Good. Small, bright, easy to miss. Keep your eyes low.",
+            ]
+        )
+    if re.search(r"\b(?:six|6)\s+gods?\b|\b(gods?|attuned|attunement|balthazar|dwayna|grenth|lyssa|melandru|kormir)\b", message):
+        return first_fresh_reply(
+            [
+                "Lyssa, probably. Style, illusion, a little trouble. That feels honest.",
+                "Lyssa fits me best, I think. Pretty, clever, and not as harmless as she looks.",
+                "For me? Lyssa. I like beauty with teeth, apparently.",
             ]
         )
     if re.search(r"\b(lead the way|you lead|go ahead|after you)\b", message):
@@ -2754,7 +2784,9 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
         try:
             decision = decide_with_ollama(event)
         except Exception as exc:
-            print(f"Ollama decision failed; using fallback rules ({type(exc).__name__}).", flush=True)
+            detail = str(exc).strip()
+            suffix = f": {detail}" if detail else ""
+            print(f"Ollama decision failed; using fallback rules ({type(exc).__name__}{suffix}).", flush=True)
             decision = fallback_rule_decision(event)
     else:
         decision = fallback_rule_decision(event)

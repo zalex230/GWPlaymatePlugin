@@ -570,6 +570,36 @@ class HermesDaemonTests(unittest.TestCase):
             "Fine by me. Watch the edges while I pick the road.",
         })
 
+    def test_azele_fallback_handles_red_iris_stage_continuation(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "yep. there's one around her stage",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertRegex(decision.response.lower(), r"althea|stage|iris")
+        self.assertNotIn("what are we doing", decision.response.lower())
+
+    def test_azele_fallback_answers_six_gods_attunement_question(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "of all the 6 gods, which one do you feel the most attuned to?",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertIn("lyssa", decision.response.lower())
+        self.assertNotIn("one more detail", decision.response.lower())
+
     def test_azele_rejects_overly_mature_old_voice(self) -> None:
         self.assertRegex("Very undignified of me, tragically.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("Obviously. I have a whole vibe to protect.", LOW_QUALITY_REPLY_PATTERNS)
