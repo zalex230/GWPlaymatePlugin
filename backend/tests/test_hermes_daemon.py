@@ -157,6 +157,8 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("'shut up'", prompt)
         self.assertIn("Do not start replies with filler noises", prompt)
         self.assertIn("do not make her sound overly mature", prompt.lower())
+        self.assertIn("socially quick 22-year-old", prompt)
+        self.assertIn("peace-talkers", prompt)
 
     def test_player_chat_prompt_includes_recent_azele_reply_for_continuity(self) -> None:
         recent_reply_texts.append("City air helps. What do you usually do first when you get back here?")
@@ -502,6 +504,10 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex("Very undignified of me, tragically.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("Obviously. I have a whole vibe to protect.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("Praise accepted. Keep it cute.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("The Northlands is no place for peace-talkers.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("Lead me on; let's get those irises.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("Let's get those irises before they move away from us.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("Keep your shield ready when we hit that line again.", LOW_QUALITY_REPLY_PATTERNS)
 
     def test_azele_rejects_repeated_filler_openers(self) -> None:
         self.assertRegex("Mhmm, I am listening.", FILLER_OPENER_PATTERN)
