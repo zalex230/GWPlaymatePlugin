@@ -47,6 +47,8 @@ map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
 VISIBLE_ENEMY_RANGE = 900.0
 AMBIENT_QUIP_MIN_SECONDS = 85.0
+AMBIENT_HEARTBEAT_POLL_SECONDS = 10.0
+AMBIENT_HEARTBEAT_ACTIVITY_SECONDS = 600.0
 PERSONA_MEMORY_DIR = Path(__file__).with_name("personas")
 GW_WIKI_API_URL = "https://wiki.guildwars.com/api.php"
 GW_WIKI_PAGE_URL = "https://wiki.guildwars.com/wiki/{title}"
@@ -1088,6 +1090,53 @@ def ambient_quip(event: TelemetryEvent) -> str:
             "I’m here. Thinking, unfortunately.",
         ]
     )
+
+
+def ambient_heartbeat_reply(now: float | None = None) -> CompanionReplyInsert | None:
+    checked_at = now if now is not None else time.time()
+    with world_state_lock:
+        if not map_display_name(world_state):
+            return None
+        if checked_at - world_state.last_interaction_timestamp > AMBIENT_HEARTBEAT_ACTIVITY_SECONDS:
+            return None
+        if world_state.close_hostile_count > 0:
+            return None
+        if not world_state.can_speak(AMBIENT_QUIP_MIN_SECONDS):
+            return None
+        event = TelemetryEvent(
+            persona=world_state.persona,
+            event_type="snapshot",
+            sender="System",
+            channel="system",
+            message="ambient heartbeat",
+            map_id=world_state.map_id,
+            map_name=world_state.map_name,
+            instance_type=world_state.instance_type,
+            active_quest_id=world_state.active_quest_id,
+            active_quest_name=world_state.active_quest_name,
+            active_quest_objectives=world_state.active_quest_objectives,
+            hostile_count=world_state.hostile_count,
+            close_hostile_count=world_state.close_hostile_count,
+            closest_hostile_distance=world_state.closest_hostile_distance,
+            player_hp=world_state.player_hp,
+            session_id=world_state.session_id,
+        )
+        reply = CompanionReplyInsert(
+            persona=world_state.persona,
+            message=clamp_gw_chat_line(ambient_quip(event)),
+            channel="party",
+            session_id=world_state.session_id,
+            urgency="LOW",
+            metadata={
+                "trigger": "ambient_heartbeat",
+                "channel_override": "CHANNEL_PARTY",
+                "map_id": world_state.map_id,
+                "map_name": world_state.map_name,
+            },
+        )
+        recent_reply_texts.append(reply.message)
+        world_state.mark_spoken()
+        return reply
 
 
 def build_character_reply_prompt(event: TelemetryEvent) -> str:
@@ -2307,12 +2356,26 @@ async def poll_unprocessed_environment_alerts() -> None:
         await asyncio.sleep(2)
 
 
+async def ambient_heartbeat_loop() -> None:
+    print("GWPlaymate Hermes ambient heartbeat enabled.", flush=True)
+    while True:
+        try:
+            reply = ambient_heartbeat_reply() if _supabase_configured() else None
+            if reply:
+                await asyncio.to_thread(insert_reply, reply)
+                print(f"Hermes ambient quip inserted for {reply.persona}: {reply.message}", flush=True)
+        except Exception as exc:
+            print(f"GWPlaymate Hermes ambient heartbeat error: {type(exc).__name__}.", flush=True)
+        await asyncio.sleep(AMBIENT_HEARTBEAT_POLL_SECONDS)
+
+
 async def main_async() -> None:
     if settings.hermes_enable_realtime:
         require_supabase_settings(settings)
         await subscribe_to_game_logs()
         asyncio.create_task(poll_unprocessed_game_logs())
         asyncio.create_task(poll_unprocessed_environment_alerts())
+        asyncio.create_task(ambient_heartbeat_loop())
     mode = "Ollama" if settings.hermes_use_ollama else "fallback rules"
     print(f"GWPlaymate companion daemon listening on {settings.hermes_host}:{settings.hermes_port} ({mode}).")
     if settings.hermes_enable_realtime:

@@ -9,6 +9,9 @@ import backend.hermes.daemon as hermes_daemon
 from backend.hermes_daemon.daemon import (
     FILLER_OPENER_PATTERN,
     LOW_QUALITY_REPLY_PATTERNS,
+    AMBIENT_HEARTBEAT_ACTIVITY_SECONDS,
+    AMBIENT_QUIP_MIN_SECONDS,
+    ambient_heartbeat_reply,
     build_character_reply_prompt,
     event_from_environment_alert,
     event_from_game_log,
@@ -36,6 +39,10 @@ class HermesDaemonTests(unittest.TestCase):
         last_map_comment_by_session.clear()
         map_comment_variant_by_session.clear()
         world_state.last_spoken_at = 0
+        world_state.last_interaction_timestamp = 0
+        world_state.map_id = 0
+        world_state.map_name = ""
+        world_state.close_hostile_count = 0
         world_state.recent_chat_history.clear()
         world_state.recent_alerts.clear()
 
@@ -556,6 +563,26 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(len(first), 1)
         self.assertEqual(second, [])
+
+    def test_ambient_heartbeat_can_restore_periodic_quip_without_snapshot_row(self) -> None:
+        now = time.time()
+        world_state.persona = "Azele"
+        world_state.session_id = "ambient-heartbeat"
+        world_state.map_id = 148
+        world_state.map_name = "Ascalon City"
+        world_state.last_interaction_timestamp = now - (AMBIENT_HEARTBEAT_ACTIVITY_SECONDS / 2)
+        world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
+
+        reply = ambient_heartbeat_reply(now=now)
+        second = ambient_heartbeat_reply(now=now)
+
+        self.assertIsNotNone(reply)
+        assert reply is not None
+        self.assertEqual(reply.persona, "Azele")
+        self.assertEqual(reply.channel, "party")
+        self.assertEqual(reply.urgency, "LOW")
+        self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
+        self.assertIsNone(second)
 
     def test_reply_can_include_trigger_log_id(self) -> None:
         decision = fallback_rule_decision(
