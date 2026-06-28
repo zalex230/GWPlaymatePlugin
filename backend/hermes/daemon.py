@@ -120,6 +120,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
     r"before they move away from us|"
     r"hit that line again|"
     r"no place for peace-talkers|"
+    r"\bthe player\b|"
     r"for now$|"
     r"i told you what mine meant"
     r")\b",
@@ -1452,6 +1453,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Never say raw numeric map IDs. If the map name is unknown, say 'this area' or 'new ground'.\n"
         "- Keep Azele's personality visible through small choices, not speeches: bright, present, sometimes playful, sometimes vain, quick to recover.\n"
         "- Speak in first person as Azele. Never say 'Azele says' or 'Azele suggests'.\n"
+        "- the player is the player, not Azele. In replies, address the player as 'you'. Do not say the name the player, do not refer to the player in third person, and never imply Azele is the player.\n"
         "- Do not mention tools, prompts, databases, model backends, or the future.\n\n"
         "- Do not mention Charr, enemies, combat, danger, or the Wall unless live facts or the player's message explicitly show them.\n"
         "- If context is ordinary or unclear, respond socially instead of inventing threats.\n\n"
@@ -1761,7 +1763,7 @@ def recent_conversation_context(limit: int = 10) -> str:
                 created_at = _parse_created_at(row.get("created_at"))
                 message = readable_game_text(row.get("message"))
                 if created_at and message:
-                    entries.append((created_at, "the player", message))
+                    entries.append((created_at, "Player", message))
 
             replies_response = (
                 client.table(COMPANION_REPLIES_TABLE)
@@ -1787,7 +1789,7 @@ def recent_conversation_context(limit: int = 10) -> str:
     for line in list(world_state.recent_chat_history)[-max(1, limit // 2):]:
         match = re.match(r"\[(?P<speaker>[^\]]+)\]:\s*(?P<message>.+)", line)
         if match:
-            speaker = "the player" if match.group("speaker").lower() in {"player", "alex"} else match.group("speaker")
+            speaker = "Player" if match.group("speaker").lower() in {"player", "alex"} else match.group("speaker")
             entries.append((local_time, speaker, readable_game_text(match.group("message"))))
             local_time = datetime.fromtimestamp(local_time.timestamp() + 0.001, timezone.utc)
     for line in list(recent_reply_texts)[-max(1, limit // 2):]:

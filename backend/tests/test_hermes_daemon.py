@@ -159,6 +159,8 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("do not make her sound overly mature", prompt.lower())
         self.assertIn("socially quick 22-year-old", prompt)
         self.assertIn("peace-talkers", prompt)
+        self.assertIn("the player is the player, not Azele", prompt)
+        self.assertIn("address the player as 'you'", prompt)
 
     def test_player_chat_prompt_includes_recent_azele_reply_for_continuity(self) -> None:
         recent_reply_texts.append("City air helps. What do you usually do first when you get back here?")
@@ -335,6 +337,10 @@ class HermesDaemonTests(unittest.TestCase):
 
     def test_azele_rejects_scolding_question_fallback_shape(self) -> None:
         self.assertRegex("Maybe. Ask me properly and I’ll answer properly.", LOW_QUALITY_REPLY_PATTERNS)
+
+    def test_azele_rejects_alex_identity_confusion(self) -> None:
+        self.assertRegex("You want me to help carry his gear or just let the player handle it?", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("I am the player, so I can carry it.", LOW_QUALITY_REPLY_PATTERNS)
 
     def test_wiki_lookup_detects_game_questions_not_social_questions(self) -> None:
         game_event = event_from_game_log(
