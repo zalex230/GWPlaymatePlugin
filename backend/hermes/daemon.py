@@ -59,6 +59,7 @@ GW_WIKI_CACHE_SECONDS = 3600.0
 PROACTIVE_EVENT_TYPES = {
     "active_quest_changed",
     "environment_alert",
+    "item_drop",
     "mission_objective_added",
     "mission_objective_completed",
     "mission_objective_updated",
@@ -137,6 +138,7 @@ MEMORY_MEANINGFUL_EVENT_TYPES = {
     "npc_speech_bubble",
     "active_quest_changed",
     "environment_alert",
+    "item_drop",
     "target_changed",
     "party_member_down",
     "party_defeated",
@@ -1378,6 +1380,15 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
             f"Lore-safe map context: {map_lore_hint(event) or 'No specific lore hint. Stay local and do not invent details.'}\n"
             "This is not urgent. Sound alive and present, but do not force a joke.\n"
         )
+    elif event.event_type == "item_drop":
+        source_name = readable_game_text(getattr(event, "agent_name", ""))
+        task = "React to a notable item drop."
+        context_block = (
+            f"Loot event: {event.message!r}\n"
+            f"Likely drop source: {source_name or 'unknown'}\n"
+            "If the source is named, treat it as likely/inferred rather than certain. "
+            "Black Dye is extremely exciting in pre-Searing Ascalon.\n"
+        )
     elif event.event_type == "active_quest_changed":
         quest = readable_game_text(event.active_quest_name)
         task = "Make a brief, useful comment about the newly active quest."
@@ -1679,6 +1690,8 @@ def should_use_direct_character_reply(event: TelemetryEvent) -> bool:
         return True
     if is_ambient_snapshot_event(event):
         return True
+    if event.event_type == "item_drop":
+        return True
     return False
 
 
@@ -1688,6 +1701,7 @@ def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
         or is_npc_dialogue_event(event)
         or event.event_type in MAP_COMMENT_EVENT_TYPES
         or is_ambient_snapshot_event(event)
+        or event.event_type == "item_drop"
     )
 
 
@@ -2063,6 +2077,22 @@ def azele_npc_dialogue_reply(event: TelemetryEvent) -> str:
     )
 
 
+def azele_item_drop_reply(event: TelemetryEvent) -> str:
+    message = readable_game_text(event.message)
+    source_name = readable_game_text(getattr(event, "agent_name", ""))
+    if re.search(r"\bblack dye\b", message, re.IGNORECASE):
+        if source_name:
+            return f"Black Dye? In pre-Searing? That is ridiculous luck. Looked like it came from {source_name}."
+        return "Black Dye? In pre-Searing? That is ridiculous luck. I did not see what dropped it."
+    return first_fresh_reply(
+        [
+            "That drop is worth checking. What did we get?",
+            "Hold on, that looked useful. Pick it up.",
+            "Finally, something worth stopping for. Check it.",
+        ]
+    )
+
+
 def ollama_generate_visible(prompt: str) -> str:
     url = settings.ollama_host.rstrip("/") + "/api/generate"
     payload = {
@@ -2184,6 +2214,13 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
             channel_override="CHANNEL_PARTY",
             urgency="LOW",
             response=clamp_gw_chat_line(ambient_quip(event)),
+        )
+    if event.event_type == "item_drop":
+        return HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="NORMAL",
+            response=clamp_gw_chat_line(azele_item_drop_reply(event)),
         )
     if event.event_type == "party_member_down":
         name = readable_game_text(getattr(event, "agent_name", ""))

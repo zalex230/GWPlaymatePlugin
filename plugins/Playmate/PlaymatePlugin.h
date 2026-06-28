@@ -20,6 +20,7 @@
 #include <vector>
 
 namespace GW::Packet::StoC {
+    struct AgentAdd;
     struct AgentState;
     struct CreateMissionProgress;
     struct ObjectiveAdd;
@@ -145,6 +146,14 @@ private:
         float selected_target_distance = 0.0f;
     };
 
+    struct RecentHostileDeath {
+        uint32_t agent_id = 0;
+        std::string agent_name;
+        float x = 0.0f;
+        float y = 0.0f;
+        uint64_t observed_ms = 0;
+    };
+
     struct DecodedMapName {
         wchar_t encoded[8]{};
         wchar_t decoded[128]{};
@@ -162,6 +171,7 @@ private:
     void QueueTelemetry(std::string event_type, std::string sender, std::string channel, std::string message);
     void QueueEnvironmentAlert(std::string alert_type, std::string severity, std::string message, const EnvironmentScan& scan);
     void QueueGameplayEvent(TelemetryEvent event);
+    void QueueItemDropEvent(const GW::Packet::StoC::AgentAdd& packet);
     void QueueSnapshotEvent(const char* event_type);
     void MaybeQueueEnvironmentAlert();
     void QueueReply(QueuedReply reply);
@@ -188,6 +198,7 @@ private:
     static void OnWriteToChatLog(GW::HookStatus* status, GW::UI::UIMessage message_id, void* wparam, void* lparam);
     static void OnMapOrQuestEvent(GW::HookStatus* status, GW::UI::UIMessage message_id, void* wparam, void* lparam);
     static void OnAgentState(GW::HookStatus* status, GW::Packet::StoC::AgentState* packet);
+    static void OnAgentAdd(GW::HookStatus* status, GW::Packet::StoC::AgentAdd* packet);
     static void OnPartyDefeated(GW::HookStatus* status, GW::Packet::StoC::PartyDefeated* packet);
     static void OnSpeechBubble(GW::HookStatus* status, GW::Packet::StoC::SpeechBubble* packet);
     static void OnObjectiveAdd(GW::HookStatus* status, GW::Packet::StoC::ObjectiveAdd* packet);
@@ -259,6 +270,8 @@ private:
     bool last_in_combat_ = false;
     mutable std::mutex gameplay_state_mutex_;
     std::unordered_map<uint32_t, uint32_t> last_agent_states_;
+    mutable std::unordered_map<uint32_t, bool> known_hostile_alive_;
+    mutable std::deque<RecentHostileDeath> recent_hostile_deaths_;
     std::unordered_map<uint32_t, float> last_mission_progress_;
     mutable std::mutex map_name_cache_mutex_;
     mutable std::unordered_map<uint32_t, std::unique_ptr<DecodedMapName>> map_name_cache_;

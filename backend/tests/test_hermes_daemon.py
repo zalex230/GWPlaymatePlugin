@@ -600,6 +600,43 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("lyssa", decision.response.lower())
         self.assertNotIn("one more detail", decision.response.lower())
 
+    def test_azele_fallback_reacts_to_black_dye_with_likely_source(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Loot",
+                    "channel": "system",
+                    "message": "Item dropped: Black Dye, likely from Charr Axe Fiend.",
+                    "metadata": {
+                        "event_type": "item_drop",
+                        "persona": "Azele",
+                        "agent_id": 99,
+                        "agent_name": "Charr Axe Fiend",
+                    },
+                }
+            )
+        )
+
+        self.assertIn("Black Dye", decision.response)
+        self.assertIn("pre-Searing", decision.response)
+        self.assertIn("Looked like", decision.response)
+        self.assertIn("Charr Axe Fiend", decision.response)
+
+    def test_azele_fallback_does_not_invent_black_dye_source(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Loot",
+                    "channel": "system",
+                    "message": "Item dropped: Black Dye.",
+                    "metadata": {"event_type": "item_drop", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertIn("Black Dye", decision.response)
+        self.assertIn("did not see what dropped it", decision.response)
+
     def test_azele_rejects_overly_mature_old_voice(self) -> None:
         self.assertRegex("Very undignified of me, tragically.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("Obviously. I have a whole vibe to protect.", LOW_QUALITY_REPLY_PATTERNS)
@@ -652,6 +689,45 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(should_use_ollama_for_event(chat_event))
         self.assertTrue(should_use_ollama_for_event(map_event))
         self.assertTrue(should_use_ollama_for_event(snapshot_event))
+
+    def test_ollama_generation_includes_item_drop_events(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Loot",
+                "channel": "system",
+                "message": "Item dropped: Black Dye, likely from Charr Axe Fiend.",
+                "metadata": {
+                    "event_type": "item_drop",
+                    "persona": "Azele",
+                    "agent_id": 99,
+                    "agent_name": "Charr Axe Fiend",
+                },
+            }
+        )
+
+        self.assertTrue(should_use_ollama_for_event(event))
+
+    def test_prompt_includes_item_drop_source_as_likely(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Loot",
+                "channel": "system",
+                "message": "Item dropped: Black Dye, likely from Charr Axe Fiend.",
+                "metadata": {
+                    "event_type": "item_drop",
+                    "persona": "Azele",
+                    "agent_id": 99,
+                    "agent_name": "Charr Axe Fiend",
+                },
+            }
+        )
+
+        prompt = build_character_reply_prompt(event)
+
+        self.assertIn("React to a notable item drop", prompt)
+        self.assertIn("Likely drop source: Charr Axe Fiend", prompt)
+        self.assertIn("treat it as likely/inferred rather than certain", prompt)
+        self.assertIn("Black Dye is extremely exciting in pre-Searing Ascalon", prompt)
 
     def test_polling_skips_records_from_before_daemon_start(self) -> None:
         older = hermes_daemon.DAEMON_STARTED_AT - timedelta(minutes=5)

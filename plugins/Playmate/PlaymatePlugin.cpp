@@ -3,12 +3,14 @@
 #include <GWCA/Constants/Constants.h>
 #include <GWCA/Context/CharContext.h>
 #include <GWCA/GameEntities/Agent.h>
+#include <GWCA/GameEntities/Item.h>
 #include <GWCA/GameContainers/Array.h>
 #include <GWCA/GameEntities/Map.h>
 #include <GWCA/GameEntities/Quest.h>
 #include <GWCA/Managers/AgentMgr.h>
 #include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
+#include <GWCA/Managers/ItemMgr.h>
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/PartyMgr.h>
 #include <GWCA/Managers/QuestMgr.h>
@@ -366,7 +368,31 @@ namespace {
         if (living->login_number) {
             return WideToUtf8(GW::Agents::GetPlayerNameByLoginNumber(living->login_number));
         }
-        return {};
+        std::wstring decoded_name;
+        GW::Agents::AsyncGetAgentName(living, decoded_name);
+        return WideToUtf8(decoded_name.c_str());
+    }
+
+    std::string DyeItemName(const GW::Item* item)
+    {
+        if (!item || item->model_id != GW::Constants::ItemID::Dye) {
+            return {};
+        }
+        switch (item->dye.dye1) {
+            case GW::DyeColor::Black: return "Black Dye";
+            case GW::DyeColor::White: return "White Dye";
+            case GW::DyeColor::Silver: return "Silver Dye";
+            case GW::DyeColor::Red: return "Red Dye";
+            case GW::DyeColor::Blue: return "Blue Dye";
+            case GW::DyeColor::Green: return "Green Dye";
+            case GW::DyeColor::Purple: return "Purple Dye";
+            case GW::DyeColor::Yellow: return "Yellow Dye";
+            case GW::DyeColor::Orange: return "Orange Dye";
+            case GW::DyeColor::Brown: return "Brown Dye";
+            case GW::DyeColor::Pink: return "Pink Dye";
+            case GW::DyeColor::Gray: return "Gray Dye";
+            default: return "Dye";
+        }
     }
 
     bool IsReplyTriggerEvent(const std::string& event_type)
@@ -764,6 +790,7 @@ void PlaymatePlugin::RegisterHooks()
     GW::UI::RegisterUIMessageCallback(&world_event_entry_, GW::UI::UIMessage::kMapChange, OnMapOrQuestEvent, 0x8000);
     GW::UI::RegisterUIMessageCallback(&world_event_entry_, GW::UI::UIMessage::kQuestAdded, OnMapOrQuestEvent, 0x8000);
     GW::UI::RegisterUIMessageCallback(&world_event_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnMapOrQuestEvent, 0x8000);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentAdd>(&stoc_event_entry_, OnAgentAdd, 0x8000);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentState>(&stoc_event_entry_, OnAgentState, 0x8000);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::PartyDefeated>(&stoc_event_entry_, OnPartyDefeated, 0x8000);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::SpeechBubble>(&stoc_event_entry_, OnSpeechBubble, 0x8000);
@@ -1120,6 +1147,58 @@ void PlaymatePlugin::QueueGameplayEvent(TelemetryEvent event)
         outbound_.push_back(std::move(event));
     }
     queue_cv_.notify_one();
+}
+
+void PlaymatePlugin::QueueItemDropEvent(const GW::Packet::StoC::AgentAdd& packet)
+{
+    if (!telemetry_enabled_.load() || (!local_capture_enabled_.load() && !backend_enabled_.load())) {
+        return;
+    }
+    if (packet.type != 4 || packet.unk3 != 0) {
+        return;
+    }
+
+    const GW::Item* item = GW::Items::GetItemById(packet.agent_type);
+    const std::string item_name = DyeItemName(item);
+    if (item_name != "Black Dye") {
+        return;
+    }
+
+    RecentHostileDeath likely_source;
+    float best_distance = std::numeric_limits<float>::max();
+    const uint64_t now_ms = MonotonicMs();
+    {
+        std::lock_guard lock(gameplay_state_mutex_);
+        for (const RecentHostileDeath& death : recent_hostile_deaths_) {
+            if (now_ms - death.observed_ms > 20000) {
+                continue;
+            }
+            const float dx = packet.position.x - death.x;
+            const float dy = packet.position.y - death.y;
+            const float distance = std::sqrt(dx * dx + dy * dy);
+            if (distance < best_distance) {
+                best_distance = distance;
+                likely_source = death;
+            }
+        }
+    }
+
+    TelemetryEvent event;
+    event.event_type = "item_drop";
+    event.sender = "Loot";
+    event.channel = "system";
+    event.severity = "NORMAL";
+    event.alert_type = "item_drop";
+    event.message = item_name;
+    if (likely_source.agent_id && best_distance <= 1800.0f && !likely_source.agent_name.empty()) {
+        event.agent_id = likely_source.agent_id;
+        event.agent_name = likely_source.agent_name;
+        event.message = std::format("Item dropped: {}, likely from {}.", item_name, likely_source.agent_name);
+    }
+    else {
+        event.message = std::format("Item dropped: {}.", item_name);
+    }
+    QueueGameplayEvent(std::move(event));
 }
 
 void PlaymatePlugin::QueueSnapshotEvent(const char* event_type)
@@ -1498,6 +1577,7 @@ PlaymatePlugin::EnvironmentScan PlaymatePlugin::BuildEnvironmentScan() const
     scan.player_y = me->pos.y;
     scan.player_hp = me->hp;
     scan.closest_hostile_distance = std::numeric_limits<float>::max();
+    const uint64_t observed_ms = MonotonicMs();
 
     const GW::AgentLiving* selected_target = GW::Agents::GetTargetAsAgentLiving();
     if (selected_target
@@ -1521,7 +1601,35 @@ PlaymatePlugin::EnvironmentScan PlaymatePlugin::BuildEnvironmentScan() const
             continue;
         }
 
-        if (!living->GetIsAlive()) {
+        const bool is_alive = living->GetIsAlive();
+        {
+            std::lock_guard lock(gameplay_state_mutex_);
+            const auto previous = known_hostile_alive_.find(living->agent_id);
+            if (previous != known_hostile_alive_.end() && previous->second && !is_alive) {
+                recent_hostile_deaths_.push_back(
+                    {
+                        living->agent_id,
+                        LivingAgentName(living),
+                        living->pos.x,
+                        living->pos.y,
+                        observed_ms,
+                    });
+                while (recent_hostile_deaths_.size() > 12) {
+                    recent_hostile_deaths_.pop_front();
+                }
+            }
+            known_hostile_alive_[living->agent_id] = is_alive;
+            for (auto it = recent_hostile_deaths_.begin(); it != recent_hostile_deaths_.end();) {
+                if (observed_ms - it->observed_ms > 20000) {
+                    it = recent_hostile_deaths_.erase(it);
+                }
+                else {
+                    ++it;
+                }
+            }
+        }
+
+        if (!is_alive) {
             ++scan.dead_hostile_count;
             continue;
         }
@@ -1698,6 +1806,14 @@ void PlaymatePlugin::OnAgentState(GW::HookStatus*, GW::Packet::StoC::AgentState*
     event.alert_type = event.event_type;
     event.severity = is_dead ? "HIGH" : "LOW";
     active_plugin->QueueGameplayEvent(std::move(event));
+}
+
+void PlaymatePlugin::OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* packet)
+{
+    if (!active_plugin || !packet) {
+        return;
+    }
+    active_plugin->QueueItemDropEvent(*packet);
 }
 
 void PlaymatePlugin::OnPartyDefeated(GW::HookStatus*, GW::Packet::StoC::PartyDefeated*)
