@@ -39,6 +39,7 @@ from backend.hermes_daemon.daemon import (
     recent_reply_texts,
     should_flush_memory_buffer,
     should_use_ollama_for_event,
+    validate_model_reply,
     world_state,
 )
 
@@ -331,6 +332,32 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("Krytan leggings", prompt)
         self.assertIn("visible outfit/style change", prompt)
         self.assertIn("longer skirt or her current mini skirt", prompt)
+        self.assertIn("assume it is Azele's gear/body/clothes", prompt)
+
+    def test_model_reply_rejects_wearable_ownership_flip(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "so should we swap back to the miniskirt? not much danger here",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "misdirected wearable ownership"):
+            validate_model_reply("Lead on then; show off your boots while I keep things clean behind you.", event)
+
+    def test_model_reply_allows_player_owned_wearable_when_explicit(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "do my boots look alright?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        self.assertEqual(validate_model_reply("Your boots look fine. Stop fussing.", event), "Your boots look fine. Stop fussing.")
 
     def test_azele_rejects_sanitized_refusal_replies(self) -> None:
         self.assertRegex("I can't engage with that, keep things appropriate.", LOW_QUALITY_REPLY_PATTERNS)

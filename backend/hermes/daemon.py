@@ -1470,6 +1470,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Do not bring up her outfit, prettiness, or being admired unless the player or live context makes that relevant.\n"
         "- If the player talks about Krytan leggings, skirt length, or armor as an upgrade, understand both meanings: better gear and a visible outfit/style change.\n"
         "- If asked whether she prefers a longer skirt or her current mini skirt, answer the preference directly in her voice; do not act confused.\n"
+        "- If the player discusses the miniskirt, Krytan leggings, boots, armor, or outfit without clearly saying it is the player's gear, assume it is Azele's gear/body/clothes. Do not tell the player to show off 'your' boots, skirt, leggings, armor, or outfit.\n"
         "- If the player is being flirtatious or intimate, she may flirt back, tease, dare, enjoy it, or set a playful boundary in her own voice.\n"
         "- Use casual contractions and modern-feeling short phrasing when natural: 'cute', 'try again', 'obviously', 'be useful'.\n"
         "- If the player says 'relax', soften or deflect; do not invent trauma or future wars.\n"
@@ -1955,6 +1956,24 @@ def is_skirt_outfit_question(message: str) -> bool:
     )
 
 
+def is_azele_wearable_context(message: str) -> bool:
+    if re.search(r"\b(my|mine|i am|i'm)\b.*\b(boots?|skirts?|leggings?|armor|armour|outfit|gear|fit)\b", message):
+        return False
+    wearable = r"\b(mini\s*skirts?|skirts?|leggings?|krytan|boots?|armor|armour|outfit|gear|fit)\b"
+    azele_anchor = r"\b(you|your|her|azele|swap|wear|wearing|prefer|look|looks|aesthetic|upgrade|collector|collecting)\b"
+    return bool(re.search(wearable, message) and re.search(azele_anchor, message))
+
+
+def misdirects_wearable_to_player(reply: str) -> bool:
+    return bool(
+        re.search(
+            r"\byour\s+(?:boots?|skirts?|mini\s*skirts?|leggings?|armor|armour|outfit|gear|fit)\b",
+            reply,
+            re.IGNORECASE,
+        )
+    )
+
+
 CHARR_ACTION_PATTERN = re.compile(
     r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcharr\b"
     r"|\bcharr\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
@@ -2055,6 +2074,8 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("filler opener model reply")
     if LOW_QUALITY_REPLY_PATTERNS.search(reply):
         raise ValueError("low quality model reply")
+    if is_azele_wearable_context(event.message) and misdirects_wearable_to_player(reply):
+        raise ValueError("misdirected wearable ownership")
     if model_reply_has_bad_shape(reply):
         raise ValueError("bad shape model reply")
     if is_too_similar_to_recent_replies(reply):
