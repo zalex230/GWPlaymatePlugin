@@ -1387,7 +1387,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
             f"Loot event: {event.message!r}\n"
             f"Likely drop source: {source_name or 'unknown'}\n"
             "If the source is named, treat it as likely/inferred rather than certain. "
-            "Black Dye is extremely exciting in pre-Searing Ascalon.\n"
+            "Black Dye is extremely exciting in pre-Searing Ascalon. "
+            "Purple, Gold, and Green rarity drops are also unusual enough to notice there.\n"
         )
     elif event.event_type == "active_quest_changed":
         quest = readable_game_text(event.active_quest_name)
@@ -2084,6 +2085,12 @@ def azele_item_drop_reply(event: TelemetryEvent) -> str:
         if source_name:
             return f"Black Dye? In pre-Searing? That is ridiculous luck. Looked like it came from {source_name}."
         return "Black Dye? In pre-Searing? That is ridiculous luck. I did not see what dropped it."
+    rarity_match = re.search(r"\b(purple|gold|green)\s+rarity\b", message, re.IGNORECASE)
+    if rarity_match:
+        rarity = rarity_match.group(1).title()
+        if source_name:
+            return f"{rarity} out here? That is worth a look. I think it dropped from {source_name}."
+        return f"{rarity} out here? That is worth a look. What did it roll?"
     return first_fresh_reply(
         [
             "That drop is worth checking. What did we get?",

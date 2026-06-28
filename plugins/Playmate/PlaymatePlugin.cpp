@@ -395,6 +395,23 @@ namespace {
         }
     }
 
+    std::string NotableRarityName(const GW::Item* item)
+    {
+        if (!item) {
+            return {};
+        }
+        if ((item->interaction & 0x10) != 0) {
+            return "Green";
+        }
+        if ((item->interaction & 0x20000) != 0) {
+            return "Gold";
+        }
+        if ((item->interaction & 0x400000) != 0) {
+            return "Purple";
+        }
+        return {};
+    }
+
     bool IsReplyTriggerEvent(const std::string& event_type)
     {
         static constexpr std::string_view triggers[] = {
@@ -1159,10 +1176,13 @@ void PlaymatePlugin::QueueItemDropEvent(const GW::Packet::StoC::AgentAdd& packet
     }
 
     const GW::Item* item = GW::Items::GetItemById(packet.agent_type);
-    const std::string item_name = DyeItemName(item);
-    if (item_name != "Black Dye") {
+    const std::string dye_name = DyeItemName(item);
+    const std::string rarity_name = NotableRarityName(item);
+    const bool is_black_dye = dye_name == "Black Dye";
+    if (!is_black_dye && rarity_name.empty()) {
         return;
     }
+    const std::string item_name = is_black_dye ? dye_name : std::format("{} rarity item", rarity_name);
 
     RecentHostileDeath likely_source;
     float best_distance = std::numeric_limits<float>::max();
