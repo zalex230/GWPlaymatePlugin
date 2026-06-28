@@ -537,9 +537,9 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(len(replies), 1)
         self.assertIn(replies[0].message, {
-            "City air helps. I can think here, at least.",
-            "I keep recognizing faces here. That is comforting and annoying.",
-            "If we stay too long, I’m going to start fussing with my hair.",
+            "City air helps. What do you usually do first when you get back here?",
+            "I keep recognizing faces here. Comforting, mostly. Do you ever get that?",
+            "If we stay too long, I’m going to start fussing with my hair, and then you have to pretend not to notice.",
         })
 
     def test_snapshot_ambient_quip_respects_cooldown(self) -> None:

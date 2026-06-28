@@ -1016,54 +1016,54 @@ def rotating_map_comment(event: TelemetryEvent) -> str:
 
 AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
     "ascalon city": [
-        "City air helps. I can think here, at least.",
-        "I keep recognizing faces here. That is comforting and annoying.",
-        "If we stay too long, I’m going to start fussing with my hair.",
+        "City air helps. What do you usually do first when you get back here?",
+        "I keep recognizing faces here. Comforting, mostly. Do you ever get that?",
+        "If we stay too long, I’m going to start fussing with my hair, and then you have to pretend not to notice.",
     ],
     "lakeside county": [
-        "Lakeside is too pretty for how much trouble finds it.",
-        "I used to think these roads were huge. Funny, right?",
-        "The water makes everything sound calmer than it is.",
+        "Lakeside is too pretty for how much trouble finds it. What are we looking for out here?",
+        "I used to think these roads were huge. Funny what changes, isn't it?",
+        "The water makes everything sound calmer than it is. Does it work on you?",
     ],
     "ashford abbey": [
-        "Ashford always feels like someone is about to assign homework.",
-        "The Abbey is quiet enough to make me suspicious.",
-        "I know, I know. Behave near the Abbey. Mostly.",
+        "Ashford always feels like someone is about to assign homework. Please tell me we are not doing homework.",
+        "The Abbey is quiet enough to make me suspicious. You hear it too, right?",
+        "I know, I know. Behave near the Abbey. Mostly. How much behaving are we aiming for?",
     ],
     "regent valley": [
-        "Open ground like this makes me watch the ridges.",
-        "Regent Valley looks peaceful until it isn't.",
-        "If anything jumps us out here, I’m blaming the scenery.",
+        "Open ground like this makes me watch the ridges. Where would you expect trouble from?",
+        "Regent Valley looks peaceful until it isn't. What do you think, keep moving?",
+        "If anything jumps us out here, I’m blaming the scenery. You can blame me after.",
     ],
     "the northlands": [
-        "Past the Wall, I’m keeping my hands warm for a reason.",
-        "If Charr show, we do not hesitate.",
-        "I’m alert. Don’t make a thing of it.",
+        "Past the Wall, I’m keeping my hands warm for a reason. How bold are we feeling?",
+        "If Charr show, we do not hesitate. You with me on that?",
+        "I’m alert. Don’t make a thing of it, unless you spotted something too.",
     ],
     "green hills county": [
-        "Green Hills does make a good view. I’ll give it that.",
-        "I am not ruining these boots for nothing, just saying.",
-        "Pretty fields, suspicious roads. Perfectly normal.",
+        "Green Hills does make a good view. I’ll give it that. Where would you go from here?",
+        "I am not ruining these boots for nothing, just saying. This had better be worth it.",
+        "Pretty fields, suspicious roads. Perfectly normal, yes?",
     ],
     "wizard's folly": [
-        "Still cold. Still rude about it.",
-        "My fingers remember this place before I do.",
-        "If I start showing off with fire, pretend you are impressed.",
+        "Still cold. Still rude about it. Are you pretending this is comfortable?",
+        "My fingers remember this place before I do. Weird, isn't it?",
+        "If I start showing off with fire, pretend you are impressed. Actually, be impressed.",
     ],
     "foible's fair": [
-        "Foible's Fair always feels like a pause before trouble.",
-        "Small place. Easy to underestimate. I would know.",
-        "This stop is useful. Tiny, but useful.",
+        "Foible's Fair always feels like a pause before trouble. Are we pausing, or starting trouble?",
+        "Small place. Easy to underestimate. I would know. What do you make of it?",
+        "This stop is useful. Tiny, but useful. Need anything while we are here?",
     ],
     "the catacombs": [
-        "I hate how quiet it gets down here.",
-        "If something whispers, we are leaving. Or burning it.",
-        "Catacombs make even my thoughts sound dramatic.",
+        "I hate how quiet it gets down here. Tell me you heard that too.",
+        "If something whispers, we are leaving. Or burning it. Which sounds better to you?",
+        "Catacombs make even my thoughts sound dramatic. That is not just me, right?",
     ],
     "fort ranik": [
-        "Ranik has that soldier-stiff feeling again.",
-        "Everyone here stands like posture is a weapon.",
-        "I can behave around soldiers. Briefly.",
+        "Ranik has that soldier-stiff feeling again. Do you think they practice that?",
+        "Everyone here stands like posture is a weapon. Should I try it?",
+        "I can behave around soldiers. Briefly. How long do you need?",
     ],
 }
 
@@ -1085,9 +1085,9 @@ def ambient_quip(event: TelemetryEvent) -> str:
             return first_fresh_reply(variants)
     return first_fresh_reply(
         [
-            "Still with you. Just watching the edges.",
-            "Quiet moment. Suspicious, but I’ll take it.",
-            "I’m here. Thinking, unfortunately.",
+            "Still with you. What are you watching for?",
+            "Quiet moment. Suspicious, but I’ll take it. What now?",
+            "I’m here. Thinking, unfortunately. Want to interrupt me?",
         ]
     )
 
