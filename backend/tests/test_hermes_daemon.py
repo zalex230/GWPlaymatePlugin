@@ -880,9 +880,34 @@ class HermesDaemonTests(unittest.TestCase):
     def test_azele_persona_loads_personal_memory_doc(self) -> None:
         notes = persona_living_notes("Azele")
 
+        self.assertIn("World memory notes", notes)
+        self.assertIn("pre-Searing Ascalon world memory", notes)
+        self.assertIn("Do not invent \"rumors\"", notes)
         self.assertIn("Personal memory notes", notes)
         self.assertIn("About the player", notes)
         self.assertIn("listen to the current exchange first", notes)
+
+    def test_azele_prompt_includes_pre_searing_lore_memory(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "what do you know about Regent Valley?",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 168,
+                    "map_name": "Regent Valley",
+                },
+            }
+        )
+
+        prompt = build_character_reply_prompt(event)
+
+        self.assertIn("pre-Searing Ascalon world memory", prompt)
+        self.assertIn("Regent Valley is lush forest and river country", prompt)
+        self.assertIn("King's Watch", prompt)
+        self.assertIn("Do not invent \"rumors\"", prompt)
 
     def test_prompt_memory_filter_skips_noisy_legacy_session_summaries(self) -> None:
         memories = [

@@ -940,6 +940,7 @@ def persona_living_notes(persona: str) -> str:
     sections: list[str] = []
     for path, heading in (
         (PERSONA_MEMORY_DIR / f"{slug}.md", "Living character notes"),
+        (PERSONA_MEMORY_DIR / f"{slug}.lore.md", "World memory notes"),
         (PERSONA_MEMORY_DIR / f"{slug}.memory.md", "Personal memory notes"),
     ):
         try:
