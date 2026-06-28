@@ -110,6 +110,8 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
     r"getting bored being cute|"
     r"compliments make me worse|"
     r"adorable and difficult|"
+    r"ask me properly|"
+    r"what are you actually asking|"
     r"for now$|"
     r"i told you what mine meant"
     r")\b",
@@ -1768,6 +1770,48 @@ def first_fresh_reply(candidates: list[str]) -> str:
     return candidates[-1] if candidates else ""
 
 
+def last_azele_reply_text() -> str:
+    local_lines = list(recent_reply_texts)
+    if local_lines:
+        return readable_game_text(local_lines[-1])
+    lines = recent_reply_lines(limit=1)
+    return readable_game_text(lines[-1]) if lines else ""
+
+
+def azele_clarification_reply(message: str) -> str | None:
+    if "?" not in message:
+        return None
+    previous = last_azele_reply_text()
+    previous_lower = previous.lower()
+    if not previous:
+        return None
+    if re.search(r"\bstaring at (?:who|whom)\b|\bwho\b", message) and "star" in previous_lower:
+        if "ranik" in previous_lower or "soldier" in previous_lower or "posture" in previous_lower:
+            return first_fresh_reply(
+                [
+                    "The soldiers, mostly. Ranik has that stiff little parade-ground feeling.",
+                    "The soldiers around Ranik. Everyone here acts like posture is a weapon.",
+                    "Mostly the Ranik soldiers. They pretend not to, which makes it worse.",
+                ]
+            )
+        return first_fresh_reply(
+            [
+                "People nearby. I made that sound more mysterious than I meant.",
+                "Whoever’s close enough to pretend they are not looking.",
+                "The nearby crowd. Sorry, I made that vague.",
+            ]
+        )
+    if re.search(r"\b(more of what|what do you mean|what was that|what\?)\b", message):
+        return first_fresh_reply(
+            [
+                "Fair. I made that sound vague by accident.",
+                "Sorry, that came out too sideways. I meant the thing I just said.",
+                "That was me being vague. Give me half a second to be normal.",
+            ]
+        )
+    return None
+
+
 CHARR_ACTION_PATTERN = re.compile(
     r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcharr\b"
     r"|\bcharr\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
@@ -2043,6 +2087,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return charr_reply
     message = (event.message or "").lower()
     quest = readable_game_text(event.active_quest_name)
+    if clarification := azele_clarification_reply(message):
+        return clarification
     if any(phrase in message for phrase in {"you ok", "you okay", "are you ok", "are you okay", "u ok", "you better"}):
         return first_fresh_reply(
             [
@@ -2171,9 +2217,9 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
     if "?" in message:
         return first_fresh_reply(
             [
-                "Maybe. Ask me properly and I’ll answer properly.",
-                "Could be. I need more than that.",
-                "Maybe. What are you actually asking?",
+                "Maybe. Give me one more detail and I’ll work with it.",
+                "Could be. Tell me what you’re looking at.",
+                "Maybe. Point me at the part you mean.",
             ]
         )
     return first_fresh_reply(

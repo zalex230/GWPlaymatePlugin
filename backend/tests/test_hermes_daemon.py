@@ -177,8 +177,33 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("answer that thread directly", prompt)
         self.assertIn("City air helps. What do you usually do first", recent_companion_context())
 
+    def test_fallback_clarifies_recent_map_quip_question(self) -> None:
+        recent_reply_texts.append("Fort Ranik. Soldiers, posture, and everyone pretending not to stare.")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "staring at who?",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 166,
+                    "map_name": "Fort Ranik",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertIn("soldiers", reply.response.lower())
+        self.assertNotIn("ask me properly", reply.response.lower())
+
     def test_azele_rejects_sanitized_refusal_replies(self) -> None:
         self.assertRegex("I can't engage with that, keep things appropriate.", LOW_QUALITY_REPLY_PATTERNS)
+
+    def test_azele_rejects_scolding_question_fallback_shape(self) -> None:
+        self.assertRegex("Maybe. Ask me properly and I’ll answer properly.", LOW_QUALITY_REPLY_PATTERNS)
 
     def test_wiki_lookup_detects_game_questions_not_social_questions(self) -> None:
         game_event = event_from_game_log(
