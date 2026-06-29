@@ -1325,6 +1325,8 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
         session_id = world_state.session_id
         map_id = world_state.map_id
         map_name = world_state.map_name
+    if recent_player_chat_in_supabase(persona, session_id, checked_at, AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS):
+        return None
     if use_ollama and should_use_ollama_for_event(event):
         try:
             decision = character_reply_with_ollama(event)
@@ -1482,6 +1484,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- If the player proposes a plan, agree/disagree with the plan and reflect the actual goal in normal words.\n"
         "- If the player corrects Azele or clarifies what they meant, accept the correction and continue from the corrected meaning.\n"
         "- If the player shares a discovery about mechanics or items, react to that discovery; do not turn it into a generic order.\n"
+        "- If the player says they made Azele drink Dwarven Ale or another alcohol consumable, treat it as happening to Azele and react directly to how it feels.\n"
         "- First decide whether the player's line is a reply to Azele's recent line. If yes, answer that thread directly.\n"
         "- If the player asks 'what?', 'what was that?', 'what do you mean?', or says they did not understand, explain Azele's immediately previous line plainly.\n"
         "- Do not answer clarification questions with fresh quips, teasing, or unrelated questions; clarify the prior message first.\n"
@@ -1770,6 +1773,15 @@ def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
         or event.event_type in MAP_COMMENT_EVENT_TYPES
         or is_ambient_snapshot_event(event)
         or event.event_type == "item_drop"
+    )
+
+
+def should_use_fast_fallback_before_ollama(event: TelemetryEvent) -> bool:
+    return (
+        event.event_type == "player_chat"
+        and event.channel == "party"
+        and event.persona.strip().lower() == "azele"
+        and is_alcohol_consumable_context(event.message)
     )
 
 
@@ -2293,6 +2305,12 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
     if event.event_type != "player_chat" or event.channel != "party":
         return False
     message = readable_game_text(event.message)
+    if is_alcohol_consumable_context(message):
+        return not re.search(
+            r"\b(?:ale|drink|drank|drunk|tipsy|warm|fifteen|15|feel|head|floor|city|stairs)\b",
+            reply,
+            re.IGNORECASE,
+        )
     if is_level_up_congratulations_context(message):
         return not re.search(r"\b(?:thank|thanks|level|14|fourteen|made it|finally|stronger|ready|charr|northlands|wall|with you)\b", reply, re.IGNORECASE)
     if is_level_charr_context(message):
@@ -2332,6 +2350,16 @@ def azele_charr_intent_reply(event: TelemetryEvent) -> str | None:
             return "Yes. Charr threaten Ascalon. Stay close and hit hard."
         return "Yes. Charr threaten Ascalon. We prepare, then go past the Wall."
     return None
+
+
+def is_alcohol_consumable_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    if re.search(r"\b(?:dwarven\s+ale|aged\s+dwarven\s+ale|hunters?\s+ale|ale|alcohol|drunk|tipsy|intoxicated)\b", lowered):
+        return True
+    return bool(
+        re.search(r"\b(?:drink|drank|made\s+you\s+drink)\b", lowered)
+        and re.search(r"\b(?:15|fifteen|dwarven|ale)\b", lowered)
+    )
 
 
 def azele_npc_dialogue_reply(event: TelemetryEvent) -> str:
@@ -2629,6 +2657,14 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return clarification
     if contextual_followup := azele_contextual_followup_reply(message):
         return contextual_followup
+    if is_alcohol_consumable_context(message):
+        return first_fresh_reply(
+            [
+                "Fifteen Dwarven Ale? Warm, loud, and a little betrayed you counted.",
+                "I feel like Ascalon City is leaning sideways. Happy now?",
+                "Fifteen? I feel brave, sparkly, and absolutely unfit for stairs.",
+            ]
+        )
     if is_fort_ranik_northlands_correction(message):
         return first_fresh_reply(
             [
@@ -3016,6 +3052,42 @@ def _parse_created_at(value: Any) -> datetime | None:
         return None
 
 
+def recent_player_chat_in_supabase(persona: str, session_id: str, now: float, quiet_seconds: float) -> bool:
+    if not _supabase_configured():
+        return False
+    try:
+        client = create_supabase_client(settings)
+        response = (
+            client.table(GAME_LOGS_TABLE)
+            .select("id,created_at,sender,channel,payload,metadata")
+            .eq("channel", "party")
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()
+        )
+    except Exception as exc:
+        print(f"Hermes recent player chat check failed: {type(exc).__name__}.", flush=True)
+        return False
+    persona_key = persona.strip().lower()
+    for row in response.data or []:
+        payload = row.get("payload") or row.get("metadata") or {}
+        if payload.get("event_type") != "player_chat":
+            continue
+        row_persona = str(payload.get("persona") or "").strip().lower()
+        if persona_key and row_persona and row_persona != persona_key:
+            continue
+        row_session_id = str(payload.get("session_id") or "").strip()
+        if session_id and row_session_id and row_session_id != session_id:
+            continue
+        created_at = _parse_created_at(row.get("created_at"))
+        if not created_at:
+            continue
+        age = now - created_at.timestamp()
+        if -5.0 <= age < quiet_seconds:
+            return True
+    return False
+
+
 def expire_stale_unconsumed_replies(*, stale_seconds: float = UNCONSUMED_REPLY_STALE_SECONDS) -> int:
     if not _supabase_configured():
         return 0
@@ -3186,7 +3258,9 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
         record_memory_event(event, record_id=record_id)
     if not should_speak_now:
         return []
-    if use_ollama and should_use_ollama_for_event(event):
+    if use_ollama and should_use_fast_fallback_before_ollama(event):
+        decision = fallback_rule_decision(event)
+    elif use_ollama and should_use_ollama_for_event(event):
         try:
             decision = decide_with_ollama(event)
         except Exception as exc:

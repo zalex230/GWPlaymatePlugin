@@ -193,6 +193,8 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("peace-talkers", prompt)
         self.assertIn("the player is the player, not Azele", prompt)
         self.assertIn("address the player as 'you'", prompt)
+        self.assertIn("made Azele drink Dwarven Ale", prompt)
+        self.assertIn("react directly to how it feels", prompt)
 
     def test_player_chat_prompt_includes_recent_azele_reply_for_continuity(self) -> None:
         recent_reply_texts.append("City air helps. What do you usually do first when you get back here?")
@@ -1149,6 +1151,56 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertNotEqual(decision.response, "Hey. I’m here.")
 
+    def test_azele_fallback_answers_dwarven_ale_consumable_roleplay(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "i just made you drink 15 dwarven ale. hows it feel?",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertTrue(decision.should_speak)
+        self.assertRegex(decision.response.lower(), r"ale|fifteen|15|warm|city|stairs")
+        self.assertNotIn("give me one more detail", decision.response.lower())
+
+    def test_player_chat_fast_dwarven_ale_reply_skips_ollama_wait(self) -> None:
+        original = hermes_daemon.decide_with_ollama
+
+        def fail_if_called(event: hermes_daemon.TelemetryEvent) -> hermes_daemon.HermesDecision:
+            raise AssertionError("Dwarven Ale fast reply should not wait on Ollama")
+
+        hermes_daemon.decide_with_ollama = fail_if_called
+        try:
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "Player",
+                        "channel": "party",
+                        "message": "i just made you drink 15 dwarven ale. hows it feel?",
+                        "metadata": {
+                            "event_type": "player_chat",
+                            "persona": "Azele",
+                            "session_id": "ale-timeout",
+                            "map_id": 148,
+                            "map_name": "Ascalon City",
+                        },
+                    }
+                ),
+                record_id=815,
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.decide_with_ollama = original
+
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0].trigger_log_id, 815)
+        self.assertRegex(replies[0].message.lower(), r"ale|fifteen|15|warm|city|stairs")
+        self.assertGreater(world_state.last_player_chat_at, 0)
+
     def test_unknown_quest_change_is_silent(self) -> None:
         replies = process_event(
             event_from_game_log(
@@ -1632,6 +1684,22 @@ class HermesDaemonTests(unittest.TestCase):
         world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
 
         self.assertIsNone(ambient_heartbeat_reply(now=now))
+
+    def test_ambient_heartbeat_waits_after_recent_supabase_player_chat(self) -> None:
+        now = time.time()
+        world_state.persona = "Azele"
+        world_state.session_id = "ambient-heartbeat-db-player-chat"
+        world_state.map_id = 148
+        world_state.map_name = "Ascalon City"
+        world_state.last_interaction_timestamp = now - (AMBIENT_HEARTBEAT_ACTIVITY_SECONDS / 2)
+        world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
+
+        original = hermes_daemon.recent_player_chat_in_supabase
+        hermes_daemon.recent_player_chat_in_supabase = lambda persona, session_id, checked_at, quiet: True
+        try:
+            self.assertIsNone(ambient_heartbeat_reply(now=now))
+        finally:
+            hermes_daemon.recent_player_chat_in_supabase = original
 
     def test_ambient_heartbeat_uses_ollama_generation_when_enabled(self) -> None:
         now = time.time()
