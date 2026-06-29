@@ -46,6 +46,9 @@ world_state = LiveWorldState(
 recent_reply_texts: deque[str] = deque(maxlen=12)
 map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
+MAX_GW_REPLY_LINES = 3
+MULTI_MESSAGE_MIN_REPLY_DELAY_MS = 4200
+MULTI_MESSAGE_MAX_REPLY_DELAY_MS = 12000
 VISIBLE_ENEMY_RANGE = 900.0
 AMBIENT_QUIP_MIN_SECONDS = 85.0
 AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 120.0
@@ -1471,7 +1474,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"Relevant memories:\n{relevant_memory_context(event.persona)}\n\n"
         f"GW Wiki background for player question:\n{gw_wiki_context(event)}\n\n"
         "Rules:\n"
-        f"- Prefer one short sentence. Use two short sentences only if the reply genuinely needs it.\n"
+        f"- Prefer one short sentence. Use two or three short chat lines only if the reply genuinely needs room to sound natural.\n"
         f"- Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
         "- Prefer 6 to 16 words per chat line. Fragments are okay.\n"
         "- Directly answer, acknowledge, or react to the player's exact intent.\n"
@@ -1628,7 +1631,7 @@ def clamp_gw_chat_line(text: str) -> str:
     return clipped.rstrip(" ,;:")
 
 
-def split_gw_chat_lines(text: str, *, max_lines: int = 2) -> list[str]:
+def split_gw_chat_lines(text: str, *, max_lines: int = MAX_GW_REPLY_LINES) -> list[str]:
     cleaned = re.sub(r"\s+", " ", text).strip()
     if not cleaned:
         return []
@@ -1637,53 +1640,62 @@ def split_gw_chat_lines(text: str, *, max_lines: int = 2) -> list[str]:
 
     sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", cleaned) if part.strip()]
     if len(sentences) <= 1:
-        words = cleaned.split(" ")
-        lines: list[str] = []
-        current = ""
-        word_index = 0
-        while word_index < len(words):
-            word = words[word_index]
-            candidate = f"{current} {word}".strip()
-            if len(candidate) <= MAX_GW_CHAT_CHARS:
-                current = candidate
-                word_index += 1
-                continue
-            if current:
-                lines.append(current)
-            current = word
-            if len(lines) == max_lines - 1:
-                break
-            word_index += 1
-        remaining = (
-            " ".join([current, *words[word_index + 1 :]]).strip()
-            if len(lines) == max_lines - 1
-            else current
-        )
-        if remaining:
-            lines.append(clamp_gw_chat_line(remaining))
-        return [line for line in lines[:max_lines] if line]
+        chunks = cleaned.split(" ")
+    else:
+        chunks = sentences
 
     lines: list[str] = []
     current = ""
-    for index, sentence in enumerate(sentences):
-        candidate = f"{current} {sentence}".strip()
+    chunk_index = 0
+    while chunk_index < len(chunks) and len(lines) < max_lines:
+        chunk = chunks[chunk_index]
+        if not chunk:
+            chunk_index += 1
+            continue
+
+        candidate = f"{current} {chunk}".strip()
         if len(candidate) <= MAX_GW_CHAT_CHARS:
             current = candidate
+            chunk_index += 1
             continue
+
         if current:
             lines.append(current)
-            current = sentence
-        else:
-            lines.append(clamp_gw_chat_line(sentence))
             current = ""
-        if len(lines) == max_lines - 1:
-            tail = " ".join([current, *sentences[index + 1 :]]).strip()
-            if tail:
-                lines.append(clamp_gw_chat_line(tail))
-            return [line for line in lines[:max_lines] if line]
-    if current:
-        lines.append(clamp_gw_chat_line(current))
+            continue
+
+        words = chunk.split(" ")
+        word_line = ""
+        consumed_words = 0
+        for word in words:
+            word_candidate = f"{word_line} {word}".strip()
+            if len(word_candidate) <= MAX_GW_CHAT_CHARS:
+                word_line = word_candidate
+                consumed_words += 1
+                continue
+            break
+        if word_line:
+            lines.append(word_line)
+        remaining_words = words[consumed_words:]
+        if remaining_words:
+            chunks[chunk_index] = " ".join(remaining_words)
+        else:
+            chunk_index += 1
+
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
     return [line for line in lines[:max_lines] if line]
+
+
+def estimate_reply_delay_ms(text: str) -> int:
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if not cleaned:
+        return MULTI_MESSAGE_MIN_REPLY_DELAY_MS
+    visible_chars = len(re.sub(r"\s+", "", cleaned))
+    word_count = max(1, len(cleaned.split()))
+    estimated = max(visible_chars * 70, word_count * 390) + 1800
+    return int(max(MULTI_MESSAGE_MIN_REPLY_DELAY_MS, min(MULTI_MESSAGE_MAX_REPLY_DELAY_MS, estimated)))
 
 
 def model_reply_has_bad_shape(reply: str) -> bool:
@@ -1727,6 +1739,10 @@ def replies_from_decision(
                 reply.metadata["multi_message"] = True
                 reply.metadata["line_index"] = index + 1
                 reply.metadata["line_count"] = total
+                if index > 0:
+                    reply.metadata["reply_delay_ms"] = estimate_reply_delay_ms(lines[index - 1])
+                if index < total - 1:
+                    reply.metadata["post_play_delay_ms"] = estimate_reply_delay_ms(line)
                 if trigger_log_id is not None:
                     reply.metadata["trigger_log_id"] = trigger_log_id
             replies.append(reply)

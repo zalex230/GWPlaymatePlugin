@@ -117,6 +117,36 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertFalse(parsed["should_speak"])
 
+    def test_split_gw_chat_lines_uses_third_line_instead_of_clipping_second(self) -> None:
+        text = (
+            "Ascalon City looks busy and familiar, and I missed that more than I expected. "
+            "It is a good feeling, like we have got some ground under our feet again before we head back out past the gates together."
+        )
+
+        lines = hermes_daemon.split_gw_chat_lines(text)
+
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(all(len(line) <= hermes_daemon.MAX_GW_CHAT_CHARS for line in lines))
+        self.assertIn("past the gates together", " ".join(lines))
+
+    def test_multi_line_replies_include_delay_metadata(self) -> None:
+        decision = hermes_daemon.HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="LOW",
+            response=(
+                "Ascalon City looks busy and familiar, and I missed that more than I expected. "
+                "It is a good feeling, like we have got some ground under our feet again before we head back out past the gates together."
+            ),
+        )
+
+        replies = hermes_daemon.replies_from_decision(decision, persona="Azele", session_id="delay-test")
+
+        self.assertEqual(len(replies), 3)
+        self.assertEqual([reply.metadata["line_index"] for reply in replies], [1, 2, 3])
+        self.assertTrue(replies[1].metadata["reply_delay_ms"] >= hermes_daemon.MULTI_MESSAGE_MIN_REPLY_DELAY_MS)
+        self.assertTrue(replies[0].metadata["post_play_delay_ms"] >= hermes_daemon.MULTI_MESSAGE_MIN_REPLY_DELAY_MS)
+
     def test_fallback_rule_replies_to_party_chat(self) -> None:
         decision = fallback_rule_decision(
             event_from_game_log(

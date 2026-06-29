@@ -111,6 +111,8 @@ private:
             bool multi_message = false;
             uint32_t line_index = 0;
             uint32_t line_count = 0;
+            uint32_t reply_delay_ms = 0;
+            uint32_t post_play_delay_ms = 0;
         };
         std::vector<ReplyItem> reply_items;
     };
@@ -121,6 +123,8 @@ private:
         bool multi_message = false;
         uint32_t line_index = 0;
         uint32_t line_count = 0;
+        uint32_t reply_delay_ms = 0;
+        uint32_t post_play_delay_ms = 0;
         uint64_t not_before_ms = 0;
     };
 

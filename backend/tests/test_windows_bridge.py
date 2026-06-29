@@ -65,6 +65,8 @@ class _FakeReplyTable:
                             "multi_message": True,
                             "line_index": 1,
                             "line_count": 2,
+                            "reply_delay_ms": 0,
+                            "post_play_delay_ms": 6200,
                         },
                     }
                 ]
@@ -181,6 +183,8 @@ class WindowsBridgeTests(unittest.TestCase):
         self.assertTrue(body["reply_items"][0]["multi_message"])
         self.assertEqual(body["reply_items"][0]["line_index"], 1)
         self.assertEqual(body["reply_items"][0]["line_count"], 2)
+        self.assertEqual(body["reply_items"][0]["reply_delay_ms"], 0)
+        self.assertEqual(body["reply_items"][0]["post_play_delay_ms"], 6200)
         self.assertEqual(fake.reply_table.updated_ids, [10])
 
 

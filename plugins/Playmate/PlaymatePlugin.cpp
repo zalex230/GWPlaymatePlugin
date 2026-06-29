@@ -1047,6 +1047,8 @@ void PlaymatePlugin::PollReplies()
                         reply.multi_message,
                         reply.line_index,
                         reply.line_count,
+                        reply.reply_delay_ms,
+                        reply.post_play_delay_ms,
                     });
                 }
             }
@@ -1331,13 +1333,16 @@ void PlaymatePlugin::QueueReply(QueuedReply reply)
         std::lock_guard lock(queue_mutex_);
         const uint64_t now = MonotonicMs();
         if (reply.multi_message && reply.line_index > 1) {
-            reply.not_before_ms = std::max(now, next_multi_reply_allowed_ms_);
+            reply.not_before_ms = std::max(now + reply.reply_delay_ms, next_multi_reply_allowed_ms_);
         }
         else {
             reply.not_before_ms = now;
         }
         if (reply.multi_message && reply.line_count > reply.line_index) {
-            next_multi_reply_allowed_ms_ = std::max(next_multi_reply_allowed_ms_, now + EstimateMultiMessageDelayMs(reply.message));
+            const uint32_t delay_ms = reply.post_play_delay_ms > 0
+                ? reply.post_play_delay_ms
+                : EstimateMultiMessageDelayMs(reply.message);
+            next_multi_reply_allowed_ms_ = std::max(next_multi_reply_allowed_ms_, now + delay_ms);
         }
         inbound_replies_.push_back(std::move(reply));
     }
@@ -1367,7 +1372,9 @@ void PlaymatePlugin::FlushRepliesToChat()
         ShowCompanionSpeechBubble(reply.message);
         QueuedTtsRequest tts_request{reply.message, reply.audio_url};
         if (reply.multi_message && reply.line_count > reply.line_index) {
-            tts_request.post_play_delay_ms = EstimateMultiMessageDelayMs(reply.message);
+            tts_request.post_play_delay_ms = reply.post_play_delay_ms > 0
+                ? reply.post_play_delay_ms
+                : EstimateMultiMessageDelayMs(reply.message);
         }
         QueueCompanionTts(std::move(tts_request));
         GW::Chat::WriteChat(GW::Chat::CHANNEL_GROUP, reply.message.c_str(), persona.c_str(), true);

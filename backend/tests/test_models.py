@@ -65,6 +65,8 @@ class ModelTests(unittest.TestCase):
                 "multi_message": True,
                 "line_index": 2,
                 "line_count": 2,
+                "reply_delay_ms": 5400,
+                "post_play_delay_ms": 6200,
             },
         )
 
@@ -76,6 +78,8 @@ class ModelTests(unittest.TestCase):
         self.assertTrue(item.multi_message)
         self.assertEqual(item.line_index, 2)
         self.assertEqual(item.line_count, 2)
+        self.assertEqual(item.reply_delay_ms, 5400)
+        self.assertEqual(item.post_play_delay_ms, 6200)
 
     def test_reply_row_uses_empty_audio_fields_for_text_only_reply(self) -> None:
         row = CompanionReplyRow(

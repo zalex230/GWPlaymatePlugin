@@ -185,6 +185,8 @@ class CompanionReplyRow(BaseModel):
             multi_message=bool(self.payload.get("multi_message")),
             line_index=int(self.payload.get("line_index") or 0),
             line_count=int(self.payload.get("line_count") or 0),
+            reply_delay_ms=int(self.payload.get("reply_delay_ms") or 0),
+            post_play_delay_ms=int(self.payload.get("post_play_delay_ms") or 0),
         )
 
 
@@ -196,6 +198,8 @@ class ReplyItem(BaseModel):
     multi_message: bool = False
     line_index: int = 0
     line_count: int = 0
+    reply_delay_ms: int = 0
+    post_play_delay_ms: int = 0
 
 
 class RepliesResponse(BaseModel):
