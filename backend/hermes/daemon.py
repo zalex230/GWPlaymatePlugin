@@ -48,6 +48,7 @@ map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
 VISIBLE_ENEMY_RANGE = 900.0
 AMBIENT_QUIP_MIN_SECONDS = 85.0
+AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 120.0
 AMBIENT_HEARTBEAT_POLL_SECONDS = 10.0
 AMBIENT_HEARTBEAT_ACTIVITY_SECONDS = 600.0
 UNCONSUMED_REPLY_STALE_SECONDS = 300.0
@@ -1295,6 +1296,8 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
             return None
         if world_state.close_hostile_count > 0:
             return None
+        if checked_at - world_state.last_player_chat_at < AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS:
+            return None
         if not world_state.can_speak(AMBIENT_QUIP_MIN_SECONDS):
             return None
         event = TelemetryEvent(
@@ -1370,6 +1373,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         context_block = (
             f"PLAYER JUST SAID: {event.message!r}\n"
             "This is the main thing to answer. Do not change topics.\n"
+            "Infer the player's practical intent before phrasing the reply: are they proposing an action, correcting Azele, explaining a mechanic, asking a follow-up, or sharing an upgrade?\n"
+            "Reply to that intent first, then add personality. Personality cannot replace comprehension.\n"
             f"Most recent Azele line, if the player is responding to it: {last_azele_line or 'None'}\n"
             "If the player is answering Azele's recent question or prompt, continue that exchange instead of treating it as a new topic.\n"
         )
@@ -1470,6 +1475,10 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"- Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
         "- Prefer 6 to 16 words per chat line. Fragments are okay.\n"
         "- Directly answer, acknowledge, or react to the player's exact intent.\n"
+        "- Before writing, silently classify the latest player message as action plan, question, correction, discovery, upgrade, joke, flirt, or clarification; the reply must fit that class.\n"
+        "- If the player proposes a plan, agree/disagree with the plan and reflect the actual goal in normal words.\n"
+        "- If the player corrects Azele or clarifies what they meant, accept the correction and continue from the corrected meaning.\n"
+        "- If the player shares a discovery about mechanics or items, react to that discovery; do not turn it into a generic order.\n"
         "- First decide whether the player's line is a reply to Azele's recent line. If yes, answer that thread directly.\n"
         "- If the player asks 'what?', 'what was that?', 'what do you mean?', or says they did not understand, explain Azele's immediately previous line plainly.\n"
         "- Do not answer clarification questions with fresh quips, teasing, or unrelated questions; clarify the prior message first.\n"
@@ -1494,7 +1503,10 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Do not contradict the player's message unless clearly impossible.\n"
         "- Do not invent a different location, target, or situation.\n"
         "- If the player suggests hunting, killing, or fighting Charr, Azele should treat that as defending Ascalon from a real enemy threat.\n"
+        "- If the player mentions leveling Azele before hunting Charr, understand the combined plan: level her up, then go past the gate/Wall/Northlands to fight Charr.\n"
         "- Never imply Charr need saving when the player suggested hunting or fighting them. If no Charr are nearby, say to prepare or head toward the Wall/Northlands.\n"
+        "- If the player talks about bag slots, item space, inventory, or a Small Equipment Pack, understand it as storage utility. Do not answer as if it is fashion or vague gear power.\n"
+        "- If the player talks about red iris flowers for a bag, understand the goal is extra inventory space from the flower errand.\n"
         "- Casual, lively, and natural. Plain is usually better than clever. Forced quips and catchphrases are bad.\n"
         "- Avoid sealed-off pronouncements that sound like the conversation is over unless the event is urgent combat.\n"
         "- Her default safe-mode vibe is relaxed, young, confident, attentive, and lightly playful when it fits.\n"
@@ -1550,7 +1562,10 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Player: 'longer skirt than your mini skirt, which do you prefer?' -> 'Shorter, honestly. But if the Krytan one protects better, I can behave.'\n"
         "Player: 'you know everyone is staring, right?' -> 'Let them. I’m not exactly hiding.'\n"
         "Player: 'lets find more charr to kill' -> 'Yes. They threaten Ascalon. We prepare, then hit them.'\n"
+        "Player: 'let's get you to level 14, then hunt Charr' -> 'Level 14, then Charr past the gate. Good. I’m with you.'\n"
         "Player: 'why would we ever save the charr?' -> 'We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second.'\n"
+        "Player: 'we get 5 more bag slots from this' -> 'Five more slots is huge. That actually changes how long we can stay out.'\n"
+        "Player: 'the Small Equipment Pack only stores weapons and armor' -> 'Only weapons and armor? Annoying, but still useful. More room is more room.'\n"
         "Player: 'relax Azele' -> 'I am relaxed. Mostly.'\n"
         "Player: 'you are quite the bratty one, huh' -> 'Maybe a little. You seem fine with it.'\n"
         "Player: 'of course you are' -> 'Yeah. You know me. Keep up.'\n"
@@ -2027,6 +2042,13 @@ def azele_contextual_followup_reply(message: str) -> str | None:
     previous = last_azele_reply_text()
     if not previous or not is_short_followup_to_azele(message):
         return None
+    if (
+        is_nicholas_sandford_context(message)
+        or is_item_space_context(message)
+        or is_level_charr_context(message)
+        or re.search(r"\b(?:charr|stage|althea|iris|irises|flowers?|skirts?|mini\s*skirts?|leggings?|krytan|armor|armour|outfit|upgrade)\b", message)
+    ):
+        return None
 
     previous_lower = previous.lower()
     message_lower = message.lower()
@@ -2188,6 +2210,36 @@ def invents_nicholas_sandford_request(reply: str, event: TelemetryEvent) -> bool
     return bool(re.search(r"\b(?:weapons?\s+mostly|potions?\s+until|save\s+potions?|iron\s+blades?)\b", reply, re.IGNORECASE))
 
 
+def is_item_space_context(text: str) -> bool:
+    return bool(
+        re.search(r"\b(?:bags?|slots?|space|inventory|equipment\s+pack|small\s+equipment\s+pack|carry|storage)\b", text or "", re.IGNORECASE)
+    )
+
+
+def is_red_iris_bag_context(text: str) -> bool:
+    return bool(re.search(r"\b(?:red\s+)?irises?|flowers?\b", text or "", re.IGNORECASE) and is_item_space_context(text))
+
+
+def is_level_charr_context(text: str) -> bool:
+    return bool(
+        re.search(r"\blevel\s*(?:14|fourteen|up|ing)?\b", text or "", re.IGNORECASE)
+        and re.search(r"\bcharr\b", text or "", re.IGNORECASE)
+    )
+
+
+def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
+    if event.event_type != "player_chat" or event.channel != "party":
+        return False
+    message = readable_game_text(event.message)
+    if is_level_charr_context(message):
+        return not re.search(r"\b(?:charr|ascalon|wall|northlands|level|fourteen|14|ready|with you)\b", reply, re.IGNORECASE)
+    if is_red_iris_bag_context(message):
+        return not re.search(r"\b(?:iris|irises|flower|bag|slot|space|nicholas|pack)\b", reply, re.IGNORECASE)
+    if is_item_space_context(message):
+        return not re.search(r"\b(?:bag|slot|space|inventory|pack|carry|storage|items?|gear|weapons?|armor|armou?r)\b", reply, re.IGNORECASE)
+    return False
+
+
 CHARR_ACTION_PATTERN = re.compile(
     r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcharr\b"
     r"|\bcharr\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
@@ -2210,6 +2262,8 @@ def azele_charr_intent_reply(event: TelemetryEvent) -> str | None:
     if CHARR_SAVE_PATTERN.search(message):
         return "We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second."
     if CHARR_ACTION_PATTERN.search(message):
+        if re.search(r"\blevel\s*(?:14|fourteen|up|ing)?\b", message, re.IGNORECASE):
+            return "Level 14, then Charr past the gate. Good. I’m with you."
         if has_visible_enemy_context(event):
             return "Yes. Charr threaten Ascalon. Stay close and hit hard."
         return "Yes. Charr threaten Ascalon. We prepare, then go past the Wall."
@@ -2318,6 +2372,8 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("unsupported ambient loot reference")
     if invents_nicholas_sandford_request(reply, event):
         raise ValueError("unsupported Nicholas Sandford request")
+    if misses_clear_player_intent(reply, event):
+        raise ValueError("missed clear player intent")
     if invents_self_duplicate(reply):
         raise ValueError("unsupported self duplicate reference")
     if model_reply_has_bad_shape(reply):
@@ -2513,6 +2569,38 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "Yeah. Nicholas is picky: five of whatever trophy he is asking for today.",
             ]
         )
+    if is_level_charr_context(message):
+        return first_fresh_reply(
+            [
+                "Level 14, then Charr past the gate. Good. I’m with you.",
+                "Yes. Get me to 14, then we make the Charr regret coming near Ascalon.",
+                "That makes sense. One more push, then we head past the Wall together.",
+            ]
+        )
+    if is_red_iris_bag_context(message):
+        return first_fresh_reply(
+            [
+                "One more iris for more bag space? Good. That is worth the detour.",
+                "Yeah, extra slots are worth chasing a flower for. Lead me to it.",
+                "A red iris for bag space is practical enough that I cannot complain.",
+            ]
+        )
+    if "small equipment pack" in message:
+        return first_fresh_reply(
+            [
+                "Only weapons and armor? Annoying, but still useful. More room is more room.",
+                "That is weirdly specific, but fine. Weapons and armor can stop clogging the main bag.",
+                "So it is gear-only storage. Still useful, just less magical than I hoped.",
+            ]
+        )
+    if re.search(r"\b(?:five|5)\s+(?:more\s+)?(?:bag\s+)?slots?\b", message) or re.search(r"\bmore space for items?\b", message):
+        return first_fresh_reply(
+            [
+                "Five more slots is huge. That actually changes how long we can stay out.",
+                "Yeah, more item space matters. Less running back every five minutes.",
+                "That is a real upgrade. More space means we can be pickier later.",
+            ]
+        )
     if any(phrase in message for phrase in {"you ok", "you okay", "are you ok", "are you okay", "u ok", "you better"}):
         return first_fresh_reply(
             [
@@ -2585,12 +2673,12 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "Good. Better gear first, then we can pretend we planned ahead.",
             ]
         )
-    if re.search(r"\b(inventory|bags?|sell|salvage|merchant|storage|gear)\b", message):
+    if re.search(r"\b(inventory|bags?|sell|salvage|merchant|storage|gear|slots?|space|pack)\b", message):
         return first_fresh_reply(
             [
-                "Good. Clear the bags first, then we move cleaner.",
-                "That makes sense. Less rummaging while something is trying to kill us.",
-                "Practical. I like it when preparation saves us embarrassment later.",
+                "Good. Clear the bags first, then we can stay out longer.",
+                "That makes sense. More space means less stopping when things get good.",
+                "Practical. I like it when preparation actually buys us time.",
             ]
         )
     if re.search(r"\b(stage|althea|iris|irises|flower|flowers)\b", message):
@@ -2953,6 +3041,7 @@ def handle_event_sync(event: TelemetryEvent, *, record_id: int | None = None, us
 
 
 def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ollama: bool = False) -> list[CompanionReplyInsert]:
+    generation_started_at = time.time()
     with world_state_lock:
         if should_ignore_radar_alert(event):
             return []
@@ -3023,6 +3112,10 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
             decision = fallback_rule_decision(event)
     else:
         decision = fallback_rule_decision(event)
+    if event.event_type in MAP_COMMENT_EVENT_TYPES or is_ambient_snapshot_event(event):
+        with world_state_lock:
+            if world_state.last_player_chat_at > generation_started_at:
+                return []
     replies = replies_from_decision(
         decision,
         persona=persona,

@@ -56,6 +56,7 @@ class HermesDaemonTests(unittest.TestCase):
         memory_last_write_at.clear()
         world_state.last_spoken_at = 0
         world_state.last_interaction_timestamp = 0
+        world_state.last_player_chat_at = 0
         world_state.persona = "Unknown Character"
         world_state.session_id = "local-playtest"
         world_state.map_id = 0
@@ -587,6 +588,38 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(len(prompts), 1)
         self.assertIn("defending Ascalon", prompts[0])
 
+    def test_azele_charr_leveling_plan_understands_player_intent(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "alright. let's get you to level 14. we're pretty close! head past the gates and lets hunt some charr",
+                    "metadata": {
+                        "event_type": "player_chat",
+                        "persona": "Azele",
+                        "map_name": "Lakeside County",
+                    },
+                }
+            )
+        )
+
+        self.assertRegex(decision.response.lower(), r"level|14|charr|wall|gate|ascalon")
+        self.assertNotRegex(decision.response.lower(), r"lakeside again|errands|what are we looking for")
+
+    def test_model_reply_rejects_charr_leveling_intent_miss(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "alright. let's get you to level 14. we're pretty close! head past the gates and lets hunt some charr",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("Lakeside again. Reminds me of my first few errands here.", event)
+
     def test_azele_rejects_saving_charr_premise(self) -> None:
         prompts: list[str] = []
         original_generate = hermes_daemon.ollama_generate_visible
@@ -630,10 +663,53 @@ class HermesDaemonTests(unittest.TestCase):
         )
 
         self.assertIn(decision.response, {
-            "Good. Clear the bags first, then we move cleaner.",
-            "That makes sense. Less rummaging while something is trying to kill us.",
-            "Practical. I like it when preparation saves us embarrassment later.",
+            "Good. Clear the bags first, then we can stay out longer.",
+            "That makes sense. More space means less stopping when things get good.",
+            "Practical. I like it when preparation actually buys us time.",
         })
+
+    def test_azele_fallback_understands_bag_slots_as_item_space(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "well we're going to get 5 more bag slots. that huge!",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertRegex(decision.response.lower(), r"slots|space|stay out|upgrade")
+        self.assertNotRegex(decision.response.lower(), r"looking good|outfit|skirt")
+
+    def test_azele_fallback_understands_small_equipment_pack_limit(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "i had no idea the bag, a Small Equipment Pack, only stores weapons and armor",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertRegex(decision.response.lower(), r"weapons|armor|gear-only|storage|room")
+        self.assertNotRegex(decision.response.lower(), r"quick swaps|what kind of stuff")
+
+    def test_model_reply_rejects_bag_slot_intent_miss(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "well we're going to get 5 more bag slots. that huge!",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("If it is an upgrade, take it. Looking good and staying alive can both happen.", event)
 
     def test_azele_fallback_handles_nicholas_sandford_grounded(self) -> None:
         decision = fallback_rule_decision(
@@ -715,6 +791,21 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertRegex(decision.response.lower(), r"althea|stage|iris")
         self.assertNotIn("what are we doing", decision.response.lower())
+
+    def test_azele_fallback_understands_red_iris_for_bag_space(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "lets try to find 1 more red iris flower so we can get another bag. that would be a huge upgrade",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertRegex(decision.response.lower(), r"iris|flower|bag|space|slots")
+        self.assertNotRegex(decision.response.lower(), r"looking good|staying alive")
 
     def test_azele_fallback_answers_six_gods_attunement_question(self) -> None:
         decision = fallback_rule_decision(
@@ -1272,6 +1363,42 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual([reply.message for reply in replies], ["Generated map thought. Where first?"])
 
+    def test_map_entry_drops_stale_reply_when_player_speaks_during_generation(self) -> None:
+        original = hermes_daemon.character_reply_with_ollama
+
+        def generate_after_player_chat(event: hermes_daemon.TelemetryEvent) -> hermes_daemon.HermesDecision:
+            world_state.last_player_chat_at = time.time()
+            return hermes_daemon.HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="LOW",
+                response="Generated map thought. Where first?",
+            )
+
+        hermes_daemon.character_reply_with_ollama = generate_after_player_chat
+        try:
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "System",
+                        "channel": "system",
+                        "message": "map_loaded",
+                        "metadata": {
+                            "event_type": "map_loaded",
+                            "persona": "Azele",
+                            "session_id": "map-stale-test",
+                            "map_id": 148,
+                            "map_name": "Ascalon City",
+                        },
+                    }
+                ),
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.character_reply_with_ollama = original
+
+        self.assertEqual(replies, [])
+
     def test_ambient_snapshot_uses_ollama_generation_when_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
         hermes_daemon.character_reply_with_ollama = lambda event: hermes_daemon.HermesDecision(
@@ -1383,6 +1510,18 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(reply.urgency, "LOW")
         self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
         self.assertIsNone(second)
+
+    def test_ambient_heartbeat_waits_after_player_chat(self) -> None:
+        now = time.time()
+        world_state.persona = "Azele"
+        world_state.session_id = "ambient-heartbeat-player-chat"
+        world_state.map_id = 148
+        world_state.map_name = "Ascalon City"
+        world_state.last_interaction_timestamp = now
+        world_state.last_player_chat_at = now - (hermes_daemon.AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS / 2)
+        world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
+
+        self.assertIsNone(ambient_heartbeat_reply(now=now))
 
     def test_ambient_heartbeat_uses_ollama_generation_when_enabled(self) -> None:
         now = time.time()

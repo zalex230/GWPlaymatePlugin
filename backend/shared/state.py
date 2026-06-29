@@ -29,6 +29,7 @@ class LiveWorldState:
     recent_chat_history: deque[str] = field(default_factory=deque)
     recent_alerts: deque[dict[str, Any]] = field(default_factory=deque)
     last_interaction_timestamp: float = 0.0
+    last_player_chat_at: float = 0.0
     last_spoken_at: float = 0.0
 
     def apply_event(self, event: TelemetryEvent) -> None:
@@ -44,12 +45,15 @@ class LiveWorldState:
         self.close_hostile_count = event.close_hostile_count
         self.closest_hostile_distance = event.closest_hostile_distance
         self.player_hp = event.player_hp
-        self.last_interaction_timestamp = time.time()
+        observed_at = time.time()
+        self.last_interaction_timestamp = observed_at
 
         if event.event_type in {"player_chat", "chat_log"}:
             self.recent_chat_history.append(f"[{event.sender}]: {event.message}")
             while len(self.recent_chat_history) > self.recent_chat_limit:
                 self.recent_chat_history.popleft()
+            if event.event_type == "player_chat" and event.channel == "party":
+                self.last_player_chat_at = observed_at
 
         if event.event_type == "environment_alert" or event.event_type in GAMEPLAY_EVENT_TYPES:
             self.recent_alerts.append(event.metadata())
