@@ -1173,6 +1173,44 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual([reply.message for reply in replies], ["Generated quiet moment. What are you watching?"])
 
+    def test_ambient_snapshot_rejects_invented_purple_loot_hook(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "System",
+                "channel": "system",
+                "message": "snapshot",
+                "metadata": {
+                    "event_type": "snapshot",
+                    "persona": "Azele",
+                    "session_id": "ambient-loot-test",
+                    "map_id": 166,
+                    "map_name": "Fort Ranik",
+                    "close_hostile_count": 0,
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unsupported ambient loot reference"):
+            validate_model_reply(
+                "Hey. That purple thing is worth stopping for—go check it while I keep watch over us both.",
+                event,
+            )
+
+    def test_item_drop_allows_purple_loot_reference(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Loot",
+                "channel": "system",
+                "message": "Item dropped: Purple rarity item.",
+                "metadata": {"event_type": "item_drop", "persona": "Azele"},
+            }
+        )
+
+        self.assertEqual(
+            validate_model_reply("Purple out here? That is worth a look. What did it roll?", event),
+            "Purple out here? That is worth a look. What did it roll?",
+        )
+
     def test_snapshot_ambient_quip_respects_cooldown(self) -> None:
         event = event_from_game_log(
             {

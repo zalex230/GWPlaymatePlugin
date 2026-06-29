@@ -82,6 +82,24 @@ NOTABLE_CHAT_PATTERNS = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+UNSUPPORTED_AMBIENT_LOOT_PATTERN = re.compile(
+    r"\b("
+    r"purple|"
+    r"gold\s+rarity|"
+    r"green\s+rarity|"
+    r"unique\s+loot|"
+    r"loot|"
+    r"drops?|"
+    r"dropped|"
+    r"item|"
+    r"chests?|"
+    r"stash(?:es)?|"
+    r"roll(?:ed|s)?|"
+    r"go\s+check\s+it|"
+    r"worth\s+stopping\s+for"
+    r")\b",
+    re.IGNORECASE,
+)
 NPC_DIALOGUE_CHANNELS = {"local", "emote"}
 NPC_DIALOGUE_IGNORE_PATTERNS = re.compile(
     r"\b(?:gwtoolbox|plugins detected|trade|wts|wtb|lfg|district|server|error)\b",
@@ -1379,6 +1397,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
             f"Ambient moment: {event.message!r}\n"
             f"Lore-safe map context: {map_lore_hint(event) or 'No specific lore hint. Stay local and do not invent details.'}\n"
             "This is not urgent. Sound alive and present, but do not force a joke.\n"
+            "Do not mention loot, drops, item colors/rarity, chests, stashes, or tell the player to check a thing unless the live event explicitly says one exists.\n"
         )
     elif event.event_type == "item_drop":
         source_name = readable_game_text(getattr(event, "agent_name", ""))
@@ -1490,7 +1509,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- If the player says 'relax', soften or deflect; do not invent trauma or future wars.\n"
         "- If the player teases her, she may tease back, but she should still understand the joke.\n"
         "- GW slang: purple means purple-rarity loot; green means unique loot; Charr are real enemies in the Northlands.\n"
-        "- If the player notices loot, acknowledge the find; do not act confused about obvious GW shorthand.\n"
+        "- If the player notices loot, acknowledge the find; do not act confused about obvious GW shorthand. Do not bring up loot slang on ambient/map comments unless loot was the live event.\n"
         "- If a party member goes down, react urgently but briefly; no lectures.\n"
         "- If Azele is getting hit, sound pressured and immediate, not poetic.\n"
         "- If combat just started, give a quick in-character warning or excited quip.\n"
@@ -2015,6 +2034,22 @@ def invents_unsupported_rumor(reply: str, event: TelemetryEvent) -> bool:
     return not re.search(r"\brumou?rs?\b", evidence, re.IGNORECASE)
 
 
+def invents_ambient_loot_hook(reply: str, event: TelemetryEvent) -> bool:
+    if not is_ambient_snapshot_event(event):
+        return False
+    evidence = " ".join(
+        [
+            event.message or "",
+            event.active_quest_name or "",
+            event.active_quest_objectives or "",
+            event.alert_type or "",
+        ]
+    )
+    if re.search(r"\b(purple|gold|green|loot|drops?|dropped|item|chests?|stash(?:es)?|roll(?:ed|s)?)\b", evidence, re.IGNORECASE):
+        return False
+    return bool(UNSUPPORTED_AMBIENT_LOOT_PATTERN.search(reply))
+
+
 CHARR_ACTION_PATTERN = re.compile(
     r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcharr\b"
     r"|\bcharr\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
@@ -2141,6 +2176,8 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("misdirected wearable ownership")
     if invents_unsupported_rumor(reply, event):
         raise ValueError("unsupported rumor reference")
+    if invents_ambient_loot_hook(reply, event):
+        raise ValueError("unsupported ambient loot reference")
     if model_reply_has_bad_shape(reply):
         raise ValueError("bad shape model reply")
     if is_too_similar_to_recent_replies(reply):
