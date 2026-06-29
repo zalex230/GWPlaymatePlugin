@@ -1504,6 +1504,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Do not invent a different location, target, or situation.\n"
         "- If the player suggests hunting, killing, or fighting Charr, Azele should treat that as defending Ascalon from a real enemy threat.\n"
         "- If the player mentions leveling Azele before hunting Charr, understand the combined plan: level her up, then go past the gate/Wall/Northlands to fight Charr.\n"
+        "- If the player congratulates Azele for leveling up, respond to the achievement: thank them, sound pleased/proud, or mention feeling stronger/ready. Do not connect level-up to red irises, bag slots, Small Equipment Packs, or affording an item unless the player explicitly connected those topics in the same latest message.\n"
         "- Never imply Charr need saving when the player suggested hunting or fighting them. If no Charr are nearby, say to prepare or head toward the Wall/Northlands.\n"
         "- If the player talks about bag slots, item space, inventory, or a Small Equipment Pack, understand it as storage utility. Do not answer as if it is fashion or vague gear power.\n"
         "- If the player talks about red iris flowers for a bag, understand the goal is extra inventory space from the flower errand.\n"
@@ -1563,6 +1564,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Player: 'you know everyone is staring, right?' -> 'Let them. I’m not exactly hiding.'\n"
         "Player: 'lets find more charr to kill' -> 'Yes. They threaten Ascalon. We prepare, then hit them.'\n"
         "Player: 'let's get you to level 14, then hunt Charr' -> 'Level 14, then Charr past the gate. Good. I’m with you.'\n"
+        "Player: 'congrats, you hit level 14' -> 'Thanks. Level 14 feels good. Now I actually feel ready for the Northlands.'\n"
         "Player: 'why would we ever save the charr?' -> 'We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second.'\n"
         "Player: 'we get 5 more bag slots from this' -> 'Five more slots is huge. That actually changes how long we can stay out.'\n"
         "Player: 'the Small Equipment Pack only stores weapons and armor' -> 'Only weapons and armor? Annoying, but still useful. More room is more room.'\n"
@@ -2046,7 +2048,8 @@ def azele_contextual_followup_reply(message: str) -> str | None:
         is_nicholas_sandford_context(message)
         or is_item_space_context(message)
         or is_level_charr_context(message)
-        or re.search(r"\b(?:charr|stage|althea|iris|irises|flowers?|skirts?|mini\s*skirts?|leggings?|krytan|armor|armour|outfit|upgrade)\b", message)
+        or is_level_up_congratulations_context(message)
+        or re.search(r"\b(?:charr|level|leveled|levelled|ding|stage|althea|iris|irises|flowers?|skirts?|mini\s*skirts?|leggings?|krytan|armor|armour|outfit|upgrade)\b", message)
     ):
         return None
 
@@ -2227,10 +2230,34 @@ def is_level_charr_context(text: str) -> bool:
     )
 
 
+def is_level_up_congratulations_context(text: str) -> bool:
+    lowered = (text or "").lower()
+    if not re.search(r"\b(?:congrats?|congratulations|grats?|nice|good job|you did it|made it|hit|reached|ding)\b", lowered):
+        return False
+    return bool(
+        re.search(r"\b(?:level(?:ed|led)?\s+up|level\s*(?:14|fourteen)|hit\s*(?:14|fourteen)|reached\s*(?:14|fourteen)|ding(?:ed)?)\b", lowered)
+    )
+
+
+def invents_level_up_pack_causality(reply: str, event: TelemetryEvent) -> bool:
+    if event.event_type != "player_chat" or event.channel != "party":
+        return False
+    message = readable_game_text(event.message)
+    if not is_level_up_congratulations_context(message):
+        return False
+    if re.search(r"\b(?:(?:red\s+)?irises?|flowers?|equipment\s+pack|pack\s+upgrade|bag\s+slots?|another\s+pack|afford)\b", message, re.IGNORECASE):
+        return False
+    return bool(
+        re.search(r"\b(?:(?:red\s+)?irises?|flowers?|equipment\s+pack|pack\s+upgrade|bag\s+slots?|another\s+pack|afford)\b", reply, re.IGNORECASE)
+    )
+
+
 def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
     if event.event_type != "player_chat" or event.channel != "party":
         return False
     message = readable_game_text(event.message)
+    if is_level_up_congratulations_context(message):
+        return not re.search(r"\b(?:thank|thanks|level|14|fourteen|made it|finally|stronger|ready|charr|northlands|wall|with you)\b", reply, re.IGNORECASE)
     if is_level_charr_context(message):
         return not re.search(r"\b(?:charr|ascalon|wall|northlands|level|fourteen|14|ready|with you)\b", reply, re.IGNORECASE)
     if is_red_iris_bag_context(message):
@@ -2372,6 +2399,8 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("unsupported ambient loot reference")
     if invents_nicholas_sandford_request(reply, event):
         raise ValueError("unsupported Nicholas Sandford request")
+    if invents_level_up_pack_causality(reply, event):
+        raise ValueError("unsupported level-up pack causality")
     if misses_clear_player_intent(reply, event):
         raise ValueError("missed clear player intent")
     if invents_self_duplicate(reply):
@@ -2567,6 +2596,14 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "Right. Nicholas wants five of one specific daily trophy for a Gift of the Huntsman.",
                 "Exactly, just his daily item. Save that, not random weapons or potions.",
                 "Yeah. Nicholas is picky: five of whatever trophy he is asking for today.",
+            ]
+        )
+    if is_level_up_congratulations_context(message):
+        return first_fresh_reply(
+            [
+                "Thanks. Level 14 feels good. Now I actually feel ready for the Northlands.",
+                "Thank you. I know it is just one level, but I feel stronger already.",
+                "We made it. Level 14 sounds much better when you say it like that.",
             ]
         )
     if is_level_charr_context(message):

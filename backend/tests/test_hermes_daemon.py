@@ -620,6 +620,53 @@ class HermesDaemonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missed clear player intent"):
             validate_model_reply("Lakeside again. Reminds me of my first few errands here.", event)
 
+    def test_azele_fallback_handles_level_up_congratulations(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "congrats Azele, you leveled up! level 14!",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertRegex(decision.response.lower(), r"thank|thanks|level 14|stronger|ready|made it")
+        self.assertNotRegex(decision.response.lower(), r"iris|pack|bag|afford")
+
+    def test_model_reply_rejects_level_up_pack_causality(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "congrats Azele, you leveled up! level 14!",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unsupported level-up pack causality"):
+            validate_model_reply(
+                "Level 14 means you can finally afford a real red iris flower for another pack upgrade.",
+                event,
+            )
+
+    def test_azele_prompt_keeps_level_up_separate_from_inventory_upgrades(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "congrats Azele, you leveled up! level 14!",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        prompt = build_character_reply_prompt(event)
+
+        self.assertIn("If the player congratulates Azele for leveling up", prompt)
+        self.assertIn("Do not connect level-up to red irises", prompt)
+        self.assertIn("congrats, you hit level 14", prompt)
+
     def test_azele_rejects_saving_charr_premise(self) -> None:
         prompts: list[str] = []
         original_generate = hermes_daemon.ollama_generate_visible
