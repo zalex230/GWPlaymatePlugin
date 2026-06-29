@@ -1352,10 +1352,12 @@ def recent_companion_context(limit: int = 4) -> str:
 
 def build_character_reply_prompt(event: TelemetryEvent) -> str:
     if event.event_type == "player_chat" and event.channel == "party":
+        last_azele_line = last_azele_reply_text()
         task = "Reply directly to the player's latest party chat."
         context_block = (
             f"PLAYER JUST SAID: {event.message!r}\n"
             "This is the main thing to answer. Do not change topics.\n"
+            f"Most recent Azele line, if the player is responding to it: {last_azele_line or 'None'}\n"
             "If the player is answering Azele's recent question or prompt, continue that exchange instead of treating it as a new topic.\n"
         )
     elif event.event_type == "target_changed":
@@ -1991,6 +1993,115 @@ def azele_clarification_reply(message: str) -> str | None:
     return None
 
 
+def is_short_followup_to_azele(message: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", message).strip().lower()
+    if not cleaned:
+        return False
+    if re.fullmatch(r"(?:yes|yeah|yep|no|nope|nah|maybe|kinda|sort of|i think so|sure)[.!?,\s]*", cleaned):
+        return True
+    if "?" in cleaned and len(cleaned.split()) <= 8:
+        return True
+    return bool(
+        re.search(
+            r"\b(?:that|this|they|them|it|there|here|why|who|what|where|how|do they|does it|are they)\b",
+            cleaned,
+        )
+        and len(cleaned.split()) <= 10
+    )
+
+
+def azele_contextual_followup_reply(message: str) -> str | None:
+    previous = last_azele_reply_text()
+    if not previous or not is_short_followup_to_azele(message):
+        return None
+
+    previous_lower = previous.lower()
+    message_lower = message.lower()
+    yesish = bool(re.fullmatch(r"\s*(?:yes|yeah|yep|sure|i think so)[.!?,\s]*", message_lower))
+    noish = bool(re.fullmatch(r"\s*(?:no|nope|nah)[.!?,\s]*", message_lower))
+
+    if "posture" in previous_lower or "practice" in previous_lower or "stiff" in previous_lower or "ranik" in previous_lower:
+        if yesish:
+            return first_fresh_reply(
+                [
+                    "Right? Ranik makes everyone stand like they are being inspected.",
+                    "Exactly. This place has parade-ground energy even when nobody is moving.",
+                    "I knew you saw it too. Everyone here looks half-drilled into the floor.",
+                ]
+            )
+        if noish:
+            return first_fresh_reply(
+                [
+                    "Maybe I'm just noticing it because the fort is so quiet.",
+                    "Fair. Maybe Ranik just makes me read too much into posture.",
+                    "Could be me, then. This place makes everyone look severe.",
+                ]
+            )
+        return first_fresh_reply(
+            [
+                "The soldiers, mostly. Fort Ranik makes everyone look like they are being inspected.",
+                "I meant the Ranik soldiers. Even standing still looks like a drill here.",
+                "Just the fort mood. Stiff soldiers, stiff walls, stiff everything.",
+            ]
+        )
+
+    if "heartbeat" in previous_lower or "quiet" in previous_lower or "silence" in previous_lower or "noise" in previous_lower:
+        if noish:
+            return "Fair. Maybe the quiet is getting to me more than it is getting to you."
+        return first_fresh_reply(
+            [
+                "I meant the quiet here. It has this steady, watchful feeling to it.",
+                "The silence, mostly. It feels too organized here, like someone is listening.",
+                "Just the way Ranik goes quiet. It makes me feel watched.",
+            ]
+        )
+
+    if "iris" in previous_lower or "irises" in previous_lower or "flower" in previous_lower:
+        return first_fresh_reply(
+            [
+                "The irises. I was thinking about the flower errand, not trying to sound mysterious.",
+                "The flowers, mostly. I got too focused on that last little errand.",
+                "I meant the red irises. Small thing, but I do not want to miss them.",
+            ]
+        )
+
+    if "wall" in previous_lower or "northlands" in previous_lower or "bold" in previous_lower:
+        return first_fresh_reply(
+            [
+                "I meant how far you want to push past the Wall. I'm game, but I want us sharp.",
+                "How bold with the Northlands. If we go looking for trouble, we do it awake.",
+                "Past the Wall bold. I will follow you, but I'm not sleepwalking into Charr.",
+            ]
+        )
+
+    if "what do you usually do first" in previous_lower or "when you get back" in previous_lower:
+        return first_fresh_reply(
+            [
+                "I was asking what your usual reset is. Bags, merchants, skills, whatever comes first.",
+                "I meant your routine when we get back somewhere safe. I like knowing how you think.",
+                "Just curious what you do first in town. I'm trying to learn your habits.",
+            ]
+        )
+
+    if "how long do you need" in previous_lower or "behave around soldiers" in previous_lower:
+        return first_fresh_reply(
+            [
+                "Around the soldiers. I can act normal for a minute if you need something here.",
+                "I meant here in Ranik. Tell me what you need before I get restless.",
+                "With the soldiers, obviously. I can behave while you sort things out.",
+            ]
+        )
+
+    if "?" in previous:
+        if yesish:
+            return "Good. I thought so. Keep going, I am with you."
+        if noish:
+            return "Fair. Then I was probably reading the mood too hard."
+        return clamp_gw_chat_line(f"I was following up on this: {previous}")
+
+    return None
+
+
 def is_simple_greeting(message: str) -> bool:
     return bool(re.fullmatch(r"\s*(?:hello|helo|hi|hey|yo|there)[.!?,\s]*", message))
 
@@ -2361,6 +2472,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
     quest = readable_game_text(event.active_quest_name)
     if clarification := azele_clarification_reply(message):
         return clarification
+    if contextual_followup := azele_contextual_followup_reply(message):
+        return contextual_followup
     if any(phrase in message for phrase in {"you ok", "you okay", "are you ok", "are you okay", "u ok", "you better"}):
         return first_fresh_reply(
             [

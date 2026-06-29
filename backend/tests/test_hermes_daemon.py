@@ -178,6 +178,10 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertIn("Recent Azele replies", prompt)
         self.assertIn("[Azele]: City air helps. What do you usually do first when you get back here?", prompt)
+        self.assertIn(
+            "Most recent Azele line, if the player is responding to it: City air helps. What do you usually do first",
+            prompt,
+        )
         self.assertIn("continue that exchange", prompt)
         self.assertIn("I usually clear inventory", prompt)
         self.assertIn("answer that thread directly", prompt)
@@ -258,6 +262,50 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(reply.should_speak)
         self.assertIn("soldiers", reply.response.lower())
         self.assertNotIn("ask me properly", reply.response.lower())
+
+    def test_fallback_continues_ambient_quip_followup_question(self) -> None:
+        recent_reply_texts.append("Ranik has that soldier-stiff feeling again. Do you think they practice that?")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "do they?",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 166,
+                    "map_name": "Fort Ranik",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"ranik|soldiers|fort")
+        self.assertNotIn("one more detail", reply.response.lower())
+
+    def test_fallback_continues_ambient_quip_short_answer(self) -> None:
+        recent_reply_texts.append("Everyone here stands like posture is a weapon. Should I try it?")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "yeah",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 166,
+                    "map_name": "Fort Ranik",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"ranik|stand|inspected|parade|drilled")
+        self.assertNotIn("what are we doing", reply.response.lower())
 
     def test_fallback_prioritizes_krytan_leggings_upgrade_over_greeting(self) -> None:
         event = event_from_game_log(
