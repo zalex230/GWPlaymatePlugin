@@ -2255,6 +2255,27 @@ def is_level_up_congratulations_context(text: str) -> bool:
     )
 
 
+def is_fort_ranik_northlands_correction(text: str) -> bool:
+    lowered = (text or "").lower()
+    return bool(
+        re.search(r"\bfort\s+ranik\b", lowered)
+        and re.search(r"\bnorth\s*lands?\b|\bnorthlands\b|\bnortlands\b", lowered)
+        and re.search(r"\b(?:not|isn'?t|aint|ain't|south|wrong|actually)\b", lowered)
+    )
+
+
+def invents_fort_ranik_northlands_route(reply: str, event: TelemetryEvent) -> bool:
+    if event.event_type != "player_chat" or event.channel != "party":
+        return False
+    if not is_fort_ranik_northlands_correction(event.message):
+        return False
+    return bool(
+        re.search(r"\bfort\s+ranik\b", reply, re.IGNORECASE)
+        and re.search(r"\bnorth\s*lands?\b|\bnorthlands\b|\bnortlands\b", reply, re.IGNORECASE)
+        and re.search(r"\b(?:past|through|toward|to|near|in|inside|from)\b", reply, re.IGNORECASE)
+    )
+
+
 def invents_level_up_pack_causality(reply: str, event: TelemetryEvent) -> bool:
     if event.event_type != "player_chat" or event.channel != "party":
         return False
@@ -2415,6 +2436,8 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("unsupported ambient loot reference")
     if invents_nicholas_sandford_request(reply, event):
         raise ValueError("unsupported Nicholas Sandford request")
+    if invents_fort_ranik_northlands_route(reply, event):
+        raise ValueError("unsupported Fort Ranik/Northlands route")
     if invents_level_up_pack_causality(reply, event):
         raise ValueError("unsupported level-up pack causality")
     if misses_clear_player_intent(reply, event):
@@ -2606,6 +2629,14 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return clarification
     if contextual_followup := azele_contextual_followup_reply(message):
         return contextual_followup
+    if is_fort_ranik_northlands_correction(message):
+        return first_fresh_reply(
+            [
+                "You’re right. I mixed that up. Fort Ranik is south; Northlands is a different problem.",
+                "Right, my mistake. Fort Ranik is south of here, not in the Northlands.",
+                "Yeah, you’re right. I got the route tangled. Fort Ranik is south.",
+            ]
+        )
     if is_nicholas_sandford_context(message):
         return first_fresh_reply(
             [

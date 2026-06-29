@@ -697,6 +697,39 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("Do not connect level-up to red irises", prompt)
         self.assertIn("congrats, you hit level 14", prompt)
 
+    def test_azele_fallback_accepts_fort_ranik_northlands_correction(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "fort ranik is all the way south. its not in the nortlands",
+                    "metadata": {
+                        "event_type": "player_chat",
+                        "persona": "Azele",
+                        "map_name": "The Northlands",
+                    },
+                }
+            )
+        )
+
+        self.assertRegex(decision.response.lower(), r"right|mistake|mixed|south")
+        self.assertRegex(decision.response.lower(), r"fort ranik|ranik")
+        self.assertNotIn("what are we doing", decision.response.lower())
+
+    def test_model_reply_rejects_fort_ranik_northlands_route_after_correction(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "fort ranik is all the way south. its not in the nortlands",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unsupported Fort Ranik/Northlands route"):
+            validate_model_reply("We just head straight north past Fort Ranik into the Northlands.", event)
+
     def test_azele_rejects_saving_charr_premise(self) -> None:
         prompts: list[str] = []
         original_generate = hermes_daemon.ollama_generate_visible
