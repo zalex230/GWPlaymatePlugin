@@ -476,6 +476,19 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertFalse(likely_gw_wiki_question(social_event))
         self.assertEqual(gw_wiki_search_query(game_event), "Ashford Abbey")
 
+    def test_wiki_lookup_detects_nicholas_sandford_statements(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "only the items that Nicholas Sandford needs",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        self.assertTrue(likely_gw_wiki_question(event))
+        self.assertEqual(gw_wiki_search_query(event), "Nicholas Sandford")
+
     def test_prompt_includes_wiki_background_without_exposing_lookup(self) -> None:
         event = event_from_game_log(
             {
@@ -497,6 +510,28 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("Lakeside County: A green county outside Ascalon City.", prompt)
         self.assertIn("Never say you looked online", prompt)
         self.assertIn("answer in Azele's voice", prompt)
+
+    def test_prompt_includes_nicholas_sandford_wiki_background(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "only the items that Nicholas Sandford needs",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+        globals_ = build_character_reply_prompt.__globals__
+        original_lookup = globals_["gw_wiki_lookup"]
+        try:
+            globals_["gw_wiki_lookup"] = (
+                lambda query: "Nicholas Sandford: Pre-Searing collector in Regent Valley who trades 1 Gift of the Huntsman for 5 trophies."
+            )
+            prompt = build_character_reply_prompt(event)
+        finally:
+            globals_["gw_wiki_lookup"] = original_lookup
+
+        self.assertIn("Nicholas Sandford: Pre-Searing collector in Regent Valley", prompt)
+        self.assertIn("Gift of the Huntsman", prompt)
 
     def test_azele_prompt_treats_charr_as_ascalonian_threat(self) -> None:
         event = event_from_game_log(
@@ -599,6 +634,54 @@ class HermesDaemonTests(unittest.TestCase):
             "That makes sense. Less rummaging while something is trying to kill us.",
             "Practical. I like it when preparation saves us embarrassment later.",
         })
+
+    def test_azele_fallback_handles_nicholas_sandford_grounded(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "only the items that Nicholas Sandford needs",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertTrue(decision.should_speak)
+        self.assertRegex(decision.response, r"Nicholas|daily|trophy|Gift of the Huntsman")
+        self.assertNotRegex(decision.response.lower(), r"weapons mostly|save potions")
+
+    def test_model_reply_rejects_invented_nicholas_sandford_request(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "only the items that Nicholas Sandford needs",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unsupported Nicholas Sandford request"):
+            validate_model_reply("Nicholas Sandford needs weapons mostly; save potions until later.", event)
+
+    def test_model_reply_rejects_self_duplicate_reference(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "System",
+                "channel": "system",
+                "message": "snapshot",
+                "metadata": {
+                    "event_type": "snapshot",
+                    "persona": "Azele",
+                    "map_id": 162,
+                    "map_name": "Regent Valley",
+                    "close_hostile_count": 0,
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unsupported self duplicate reference"):
+            validate_model_reply("Five extra bags is nice, but someone else looking like me might take them.", event)
 
     def test_azele_fallback_handles_lead_the_way_continuation(self) -> None:
         decision = fallback_rule_decision(

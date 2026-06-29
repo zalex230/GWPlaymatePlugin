@@ -100,6 +100,10 @@ UNSUPPORTED_AMBIENT_LOOT_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+UNSUPPORTED_SELF_DUPLICATE_PATTERN = re.compile(
+    r"\b(?:someone|somebody|anyone)\s+else\s+(?:who\s+)?(?:looks?|looking)\s+like\s+me\b",
+    re.IGNORECASE,
+)
 NPC_DIALOGUE_CHANNELS = {"local", "emote"}
 NPC_DIALOGUE_IGNORE_PATTERNS = re.compile(
     r"\b(?:gwtoolbox|plugins detected|trade|wts|wtb|lfg|district|server|error)\b",
@@ -756,6 +760,11 @@ GW_WIKI_KEYWORDS = {
     "rune",
     "dye",
     "collector",
+    "nicholas",
+    "sandford",
+    "huntsman",
+    "trophy",
+    "trophies",
     "henchman",
     "pre-searing",
     "presearing",
@@ -792,6 +801,8 @@ def likely_gw_wiki_question(event: TelemetryEvent) -> bool:
     message = readable_game_text(event.message).lower()
     if not message or NON_WIKI_SOCIAL_PATTERNS.search(message):
         return False
+    if re.search(r"\b(?:nicholas|sandford|gift of the huntsman|huntsman|professor yakkington)\b", message):
+        return True
     has_question_shape = "?" in message or message.startswith(GW_WIKI_QUESTION_STARTERS)
     if not has_question_shape:
         return False
@@ -806,6 +817,8 @@ def likely_gw_wiki_question(event: TelemetryEvent) -> bool:
 
 def gw_wiki_search_query(event: TelemetryEvent) -> str:
     message = readable_game_text(event.message)
+    if re.search(r"\b(?:nicholas|sandford|gift of the huntsman|huntsman|professor yakkington)\b", message, re.IGNORECASE):
+        return "Nicholas Sandford"
     query = re.sub(r"\b(azele|hey|hi|hello|please|pls|can you|could you|tell me about)\b", " ", message, flags=re.I)
     query = re.sub(
         r"^\s*(?:where is|where do|where can|how do|how can|what is|what are|what does|who is|who are|which|why is)\s+",
@@ -2161,6 +2174,20 @@ def invents_ambient_loot_hook(reply: str, event: TelemetryEvent) -> bool:
     return bool(UNSUPPORTED_AMBIENT_LOOT_PATTERN.search(reply))
 
 
+def invents_self_duplicate(reply: str) -> bool:
+    return bool(UNSUPPORTED_SELF_DUPLICATE_PATTERN.search(reply))
+
+
+def is_nicholas_sandford_context(text: str) -> bool:
+    return bool(re.search(r"\b(?:nicholas|sandford|gift of the huntsman|huntsman|professor yakkington)\b", text or "", re.IGNORECASE))
+
+
+def invents_nicholas_sandford_request(reply: str, event: TelemetryEvent) -> bool:
+    if not is_nicholas_sandford_context(event.message):
+        return False
+    return bool(re.search(r"\b(?:weapons?\s+mostly|potions?\s+until|save\s+potions?|iron\s+blades?)\b", reply, re.IGNORECASE))
+
+
 CHARR_ACTION_PATTERN = re.compile(
     r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcharr\b"
     r"|\bcharr\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
@@ -2289,6 +2316,10 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("unsupported rumor reference")
     if invents_ambient_loot_hook(reply, event):
         raise ValueError("unsupported ambient loot reference")
+    if invents_nicholas_sandford_request(reply, event):
+        raise ValueError("unsupported Nicholas Sandford request")
+    if invents_self_duplicate(reply):
+        raise ValueError("unsupported self duplicate reference")
     if model_reply_has_bad_shape(reply):
         raise ValueError("bad shape model reply")
     if is_too_similar_to_recent_replies(reply):
@@ -2474,6 +2505,14 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return clarification
     if contextual_followup := azele_contextual_followup_reply(message):
         return contextual_followup
+    if is_nicholas_sandford_context(message):
+        return first_fresh_reply(
+            [
+                "Right. Nicholas wants five of one specific daily trophy for a Gift of the Huntsman.",
+                "Exactly, just his daily item. Save that, not random weapons or potions.",
+                "Yeah. Nicholas is picky: five of whatever trophy he is asking for today.",
+            ]
+        )
     if any(phrase in message for phrase in {"you ok", "you okay", "are you ok", "are you okay", "u ok", "you better"}):
         return first_fresh_reply(
             [
