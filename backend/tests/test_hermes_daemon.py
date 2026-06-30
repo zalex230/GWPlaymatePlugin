@@ -1035,7 +1035,7 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(model_reply_has_bad_shape("Feels good being home after all that travel though it looks different but"))
         self.assertFalse(model_reply_has_bad_shape("I know. Still nice to hear."))
 
-    def test_map_entry_rejects_overlong_three_line_generation(self) -> None:
+    def test_map_entry_rejects_malformed_three_line_generation(self) -> None:
         event = event_from_game_log(
             {
                 "sender": "System",
@@ -1050,13 +1050,24 @@ class HermesDaemonTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaisesRegex(ValueError, "low quality|overlong map entry"):
+        with self.assertRaisesRegex(ValueError, "low quality"):
             validate_model_reply(
                 "Welcome back home then. "
                 "It always smells like fresh green grass up here in Ascalon City compared to where I was last time. "
                 "Ready to settle down and wait it out until you need us more than me waiting around?",
                 event,
             )
+        self.assertEqual(
+            validate_model_reply(
+                "Welcome back home then. "
+                "It always smells like fresh green grass up here in Ascalon City. "
+                "I could stay a while if you wanted to look around.",
+                event,
+            ),
+            "Welcome back home then. "
+            "It always smells like fresh green grass up here in Ascalon City. "
+            "I could stay a while if you wanted to look around.",
+        )
 
     def test_ollama_generation_includes_player_map_and_ambient_events(self) -> None:
         chat_event = event_from_game_log(

@@ -2477,8 +2477,6 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("unsupported self duplicate reference")
     if model_reply_has_bad_shape(reply):
         raise ValueError("bad shape model reply")
-    if event.event_type in MAP_COMMENT_EVENT_TYPES and len(split_gw_chat_lines(reply)) > 2:
-        raise ValueError("overlong map entry model reply")
     if is_too_similar_to_recent_replies(reply):
         raise ValueError("repeated recent reply")
     if not reply:
