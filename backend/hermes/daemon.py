@@ -148,6 +148,9 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
     r"hit that line again|"
     r"no place for peace-talkers|"
     r"\bthe\s+player\b|"
+    r"ready\s+to\s+settle\s+down|"
+    r"wait\s+it\s+out\s+until\s+you\s+need|"
+    r"need\s+us\s+more\s+than\s+me\s+waiting\s+around|"
     r"for now$|"
     r"i told you what mine meant"
     r")\b",
@@ -2474,6 +2477,8 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("unsupported self duplicate reference")
     if model_reply_has_bad_shape(reply):
         raise ValueError("bad shape model reply")
+    if event.event_type in MAP_COMMENT_EVENT_TYPES and len(split_gw_chat_lines(reply)) > 2:
+        raise ValueError("overlong map entry model reply")
     if is_too_similar_to_recent_replies(reply):
         raise ValueError("repeated recent reply")
     if not reply:

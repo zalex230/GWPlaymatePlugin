@@ -1016,6 +1016,10 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex("Lead me on; let's get those irises.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("Let's get those irises before they move away from us.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("Keep your shield ready when we hit that line again.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex(
+            "Ready to settle down and wait it out until you need us more than me waiting around?",
+            LOW_QUALITY_REPLY_PATTERNS,
+        )
 
     def test_azele_rejects_repeated_filler_openers(self) -> None:
         self.assertRegex("Mhmm, I am listening.", FILLER_OPENER_PATTERN)
@@ -1030,6 +1034,29 @@ class HermesDaemonTests(unittest.TestCase):
         )
         self.assertTrue(model_reply_has_bad_shape("Feels good being home after all that travel though it looks different but"))
         self.assertFalse(model_reply_has_bad_shape("I know. Still nice to hear."))
+
+    def test_map_entry_rejects_overlong_three_line_generation(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "System",
+                "channel": "system",
+                "message": "map_loaded",
+                "metadata": {
+                    "event_type": "map_loaded",
+                    "persona": "Azele",
+                    "map_id": 148,
+                    "map_name": "Ascalon City",
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "low quality|overlong map entry"):
+            validate_model_reply(
+                "Welcome back home then. "
+                "It always smells like fresh green grass up here in Ascalon City compared to where I was last time. "
+                "Ready to settle down and wait it out until you need us more than me waiting around?",
+                event,
+            )
 
     def test_ollama_generation_includes_player_map_and_ambient_events(self) -> None:
         chat_event = event_from_game_log(
