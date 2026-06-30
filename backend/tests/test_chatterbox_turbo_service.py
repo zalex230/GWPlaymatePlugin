@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -41,6 +42,36 @@ class ChatterboxTurboServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+    def test_encode_wav_writes_windows_pcm_audio(self) -> None:
+        class FakeWave:
+            ndim = 1
+
+            def detach(self) -> "FakeWave":
+                return self
+
+            def cpu(self) -> "FakeWave":
+                return self
+
+            def unsqueeze(self, dim: int) -> "FakeWave":
+                self.unsqueeze_dim = dim
+                return self
+
+        calls = {}
+
+        def fake_save(buffer, wav, sample_rate, **kwargs):
+            calls["sample_rate"] = sample_rate
+            calls.update(kwargs)
+            buffer.write(b"RIFFpcm")
+
+        with patch.dict("sys.modules", {"torchaudio": type("FakeTorchaudio", (), {"save": fake_save})}):
+            audio = service._encode_wav(FakeWave(), 24000)
+
+        self.assertEqual(audio, b"RIFFpcm")
+        self.assertEqual(calls["format"], "wav")
+        self.assertEqual(calls["encoding"], "PCM_S")
+        self.assertEqual(calls["bits_per_sample"], 16)
+        self.assertEqual(calls["sample_rate"], 24000)
 
 
 if __name__ == "__main__":

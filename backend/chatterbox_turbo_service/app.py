@@ -127,7 +127,7 @@ def _encode_wav(wav: Any, sample_rate: int) -> bytes:
     if getattr(wav, "ndim", 0) == 1:
         wav = wav.unsqueeze(0)
     buffer = io.BytesIO()
-    torchaudio.save(buffer, wav, sample_rate, format="wav")
+    torchaudio.save(buffer, wav, sample_rate, format="wav", encoding="PCM_S", bits_per_sample=16)
     return buffer.getvalue()
 
 
