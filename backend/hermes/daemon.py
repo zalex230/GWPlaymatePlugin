@@ -159,7 +159,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
 )
 FILLER_OPENER_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]+", re.IGNORECASE)
 DANGLING_REPLY_ENDING_PATTERN = re.compile(
-    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|exactly|just|what|who|where|why|how)$",
+    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|exactly|just|what|who|where|why|how)$",
     re.IGNORECASE,
 )
 MEMORY_MEANINGFUL_EVENT_TYPES = {
@@ -1502,6 +1502,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Do not react to vague radar/combat-start noise. Speak about combat only for visible enemies, called targets, taking damage, or a party member down.\n"
         "- Do not append unrelated questions like 'when did this happen?' to greetings or simple replies.\n"
         "- If the player asks a question, answer the question.\n"
+        "- If the player asks what ranger pet Devona should get, recommend a pet directly and mention Devona/pet/stalker/warthog as relevant.\n"
         "- Do not invent vague hooks like rumors, stories, signs, whispers, or 'they said' unless the player's message, NPC dialogue, quest text, or live event explicitly mentions them.\n"
         "- If GW Wiki background is provided, use it as factual background, paraphrase it, and answer in Azele's voice.\n"
         "- Never say you looked online, checked a wiki, read a page, or used a source. She should sound like she knows, remembers, or has heard it in-world.\n"
@@ -1567,6 +1568,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Good style examples:\n"
         "Player: 'hello Azele' -> 'Hey. I’m here. What are we doing?'\n"
         "Player: 'where is the nearest city?' -> 'Ascalon City, if we want somewhere proper. We can head back.'\n"
+        "Player: 'Devona needs a ranger pet. Melandru stalker or warthog?' -> 'Stalker, I think. Devona already has enough blunt-force energy.'\n"
         "Player: 'hidden stash ahead' -> 'Nice catch. Let’s check it.'\n"
         "Player: 'oo. loot' -> 'Finally, something worth stopping for. Go on, check it.'\n"
         "Player: 'ooo a purple' -> 'Oh, that’s actually pretty good. Show me what it is.'\n"
@@ -2296,6 +2298,53 @@ def is_fort_ranik_northlands_correction(text: str) -> bool:
     )
 
 
+def is_devona_pet_context(text: str) -> bool:
+    lowered = readable_game_text(text).lower()
+    return bool(
+        (
+            re.search(r"\bdevona\b", lowered)
+            and re.search(r"\b(?:pet|ranger|animal|stalker|melandru|warthog|bear|wolf)\b", lowered)
+        )
+        or re.search(r"\b(?:melandru\s+stalker|stalker|warthog)\b", lowered)
+        and re.search(r"\b(?:pet|ranger|animal|think|which|what\s+do\s+you\s+think|or)\b", lowered)
+    )
+
+
+def azele_devona_pet_reply(message: str) -> str:
+    lowered = readable_game_text(message).lower()
+    if "melandru" in lowered and "warthog" in lowered:
+        return first_fresh_reply(
+            [
+                "Melandru stalker for Devona, I think. It feels sharper than a warthog.",
+                "I would pick the stalker. Devona already has enough blunt-force energy.",
+                "Stalker. Cleaner, quicker, and it suits her better than a warthog.",
+            ]
+        )
+    if "warthog" in lowered:
+        return first_fresh_reply(
+            [
+                "A warthog for Devona would be funny, but maybe too on the nose.",
+                "Warthog works if we want sturdy. I still think she deserves something quicker.",
+                "A warthog is practical. Not graceful, but Devona probably would not care.",
+            ]
+        )
+    if "melandru" in lowered or "stalker" in lowered:
+        return first_fresh_reply(
+            [
+                "A Melandru stalker suits Devona. Useful, alert, and not too fussy.",
+                "Yeah, a stalker feels right for her. Practical without looking boring.",
+                "I like the stalker idea. Devona would make it look disciplined somehow.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "For Devona? Something sturdy and useful. A stalker would fit her better than something cute.",
+            "Devona needs a pet that can actually keep up. I would lean stalker.",
+            "A ranger pet for Devona should be practical first. Stalker, if we can get one.",
+        ]
+    )
+
+
 def invents_fort_ranik_northlands_route(reply: str, event: TelemetryEvent) -> bool:
     if event.event_type != "player_chat" or event.channel != "party":
         return False
@@ -2335,6 +2384,8 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return not re.search(r"\b(?:thank|thanks|level|14|fourteen|made it|finally|stronger|ready|charr|northlands|wall|with you)\b", reply, re.IGNORECASE)
     if is_level_charr_context(message):
         return not re.search(r"\b(?:charr|ascalon|wall|northlands|level|fourteen|14|ready|with you)\b", reply, re.IGNORECASE)
+    if is_devona_pet_context(message):
+        return not re.search(r"\b(?:devona|pet|ranger|stalker|melandru|warthog|animal)\b", reply, re.IGNORECASE)
     if is_red_iris_bag_context(message):
         return not re.search(r"\b(?:iris|irises|flower|bag|slot|space|nicholas|pack)\b", reply, re.IGNORECASE)
     if is_item_space_context(message):
@@ -2703,6 +2754,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "Yeah. Nicholas is picky: five of whatever trophy he is asking for today.",
             ]
         )
+    if is_devona_pet_context(message):
+        return azele_devona_pet_reply(message)
     if is_level_up_congratulations_context(message):
         return first_fresh_reply(
             [

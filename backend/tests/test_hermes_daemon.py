@@ -1098,7 +1098,44 @@ class HermesDaemonTests(unittest.TestCase):
             )
         )
         self.assertTrue(model_reply_has_bad_shape("Feels good being home after all that travel though it looks different but"))
+        self.assertTrue(
+            model_reply_has_bad_shape(
+                "A melandru stalker sounds better for her though, maybe she'll actually use that instead of just hoarding them like Devona does with everything else anyway."
+            )
+        )
         self.assertFalse(model_reply_has_bad_shape("I know. Still nice to hear."))
+
+    def test_devona_pet_plan_avoids_generic_fallback(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "alright. im logging off, but our next quest is to get Devona a ranger pet that she can use.",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        decision = fallback_rule_decision(event)
+
+        self.assertIn("Devona", decision.response)
+        self.assertRegex(decision.response, r"\b(?:pet|stalker|ranger)\b")
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("Yeah, I’m here. What are we doing?", event)
+
+    def test_devona_pet_choice_gets_direct_recommendation(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "im thinking a melandru stalker or a warthog. what do you think?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        recent_reply_texts.append("Our next quest is to get Devona a ranger pet.")
+        decision = fallback_rule_decision(event)
+
+        self.assertRegex(decision.response, r"\b(?:stalker|warthog|Devona)\b")
 
     def test_map_entry_rejects_malformed_three_line_generation(self) -> None:
         event = event_from_game_log(
