@@ -147,6 +147,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
     r"before they move away from us|"
     r"hit that line again|"
     r"no place for peace-talkers|"
+    r"alex(?:ie|i)?|"
     r"\bthe\s+player\b|"
     r"ready\s+to\s+settle\s+down|"
     r"wait\s+it\s+out\s+until\s+you\s+need|"
@@ -694,6 +695,7 @@ def fetch_recent_memories(character_name: str, *, limit: int = 12) -> list[Memor
 
 def sanitize_memory_for_prompt(text: str) -> str:
     cleaned = readable_game_text(text)
+    cleaned = re.sub(r"\bAlex(?:ie|i)?\b", "the player", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bmaps?\s+\d+(?:\s*,\s*\d+)*\b", "areas", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bmap_id\s*[=:]\s*\d+\b", "map unknown", cleaned, flags=re.IGNORECASE)
     return cleaned
@@ -1555,7 +1557,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Never say raw numeric map IDs. If the map name is unknown, say 'this area' or 'new ground'.\n"
         "- Keep Azele's personality visible through small choices, not speeches: bright, present, sometimes playful, sometimes vain, quick to recover.\n"
         "- Speak in first person as Azele. Never say 'Azele says' or 'Azele suggests'.\n"
-        "- The player is not Azele. In replies, address the player as 'you'. Do not refer to the player in third person, and never imply Azele is the player.\n"
+        "- The player is not Azele. In replies, address the player as 'you'. Do not call the player Alex, Alexi, Alexie, or any invented name. Do not refer to the player in third person, and never imply Azele is the player.\n"
         "- Do not mention tools, prompts, databases, model backends, or the future.\n\n"
         "- Do not mention Charr, enemies, combat, danger, or the Wall unless live facts or the player's message explicitly show them.\n"
         "- If context is ordinary or unclear, respond socially instead of inventing threats.\n\n"

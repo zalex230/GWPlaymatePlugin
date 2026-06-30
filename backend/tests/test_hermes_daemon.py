@@ -38,6 +38,7 @@ from backend.hermes_daemon.daemon import (
     recent_conversation_context,
     recent_companion_context,
     recent_reply_texts,
+    sanitize_memory_for_prompt,
     should_flush_memory_buffer,
     should_use_ollama_for_event,
     validate_model_reply,
@@ -487,6 +488,19 @@ class HermesDaemonTests(unittest.TestCase):
     def test_azele_rejects_alex_identity_confusion(self) -> None:
         self.assertRegex("You want me to help carry his gear or just let the player handle it?", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("I am the player, so I can carry it.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("Are we still aiming for those Charr then, Alexie?", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("I am right here, Alex.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertNotRegex("I am right here with you. (That sounded softer than I meant.)", LOW_QUALITY_REPLY_PATTERNS)
+
+    def test_memory_prompt_sanitizes_player_name_variants(self) -> None:
+        self.assertEqual(
+            sanitize_memory_for_prompt("Alex prefers Azele to answer directly."),
+            "the player prefers Azele to answer directly.",
+        )
+        self.assertEqual(
+            sanitize_memory_for_prompt("Alexie is not a real name she should use."),
+            "the player is not a real name she should use.",
+        )
 
     def test_wiki_lookup_detects_game_questions_not_social_questions(self) -> None:
         game_event = event_from_game_log(
