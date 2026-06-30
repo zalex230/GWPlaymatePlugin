@@ -65,6 +65,12 @@ class BackendSettings:
     kokoro_tts_voice: str = os.getenv("KOKORO_TTS_VOICE", "af_bella")
     kokoro_tts_format: str = os.getenv("KOKORO_TTS_FORMAT", "mp3")
     kokoro_tts_timeout_seconds: float = _float_env("KOKORO_TTS_TIMEOUT_SECONDS", 20.0)
+    chatterbox_tts_url: str = os.getenv("CHATTERBOX_TTS_URL", "http://127.0.0.1:4123/v1/audio/speech")
+    chatterbox_tts_voice_sample: str = os.getenv("CHATTERBOX_TTS_VOICE_SAMPLE", "")
+    chatterbox_tts_format: str = os.getenv("CHATTERBOX_TTS_FORMAT", "wav")
+    chatterbox_tts_timeout_seconds: float = _float_env("CHATTERBOX_TTS_TIMEOUT_SECONDS", 45.0)
+    chatterbox_tts_exaggeration: float = _float_env("CHATTERBOX_TTS_EXAGGERATION", 0.7)
+    chatterbox_tts_temperature: float = _float_env("CHATTERBOX_TTS_TEMPERATURE", 0.8)
 
 
 def load_settings() -> BackendSettings:

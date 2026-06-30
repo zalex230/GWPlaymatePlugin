@@ -83,9 +83,9 @@ model setup. Set `HERMES_USE_OLLAMA=true` when the pipe is proven and Ollama is 
 Replies are written to `companion_replies`, not back into `game_logs`, and include `trigger_log_id`
 when the source Supabase row is available.
 
-### Optional Kokoro TTS
+### Optional local TTS
 
-For higher-quality voice, run a Kokoro-compatible TTS server on the Mac Mini and set:
+For stable local voice, run a Kokoro-compatible TTS server on the Mac Mini and set:
 
 ```bash
 HERMES_TTS_PROVIDER=kokoro
@@ -95,9 +95,18 @@ HERMES_TTS_STORAGE_BUCKET=playmate-tts
 HERMES_TTS_SIGNED_URL_SECONDS=600
 ```
 
+For experimental expressive voice, run the project-owned Chatterbox Turbo service and set:
+
+```bash
+HERMES_TTS_PROVIDER=chatterbox-turbo
+CHATTERBOX_TTS_URL=http://127.0.0.1:4123/v1/audio/speech
+CHATTERBOX_TTS_VOICE_SAMPLE=/local/path/azele.wav
+CHATTERBOX_TTS_FORMAT=wav
+```
+
 Run `backend/supabase/setup.sql` once so the private `playmate-tts` Storage bucket exists. Hermes uses
 the service-role key to upload audio and create signed URLs; the plugin only receives the signed URL.
-If Kokoro or Storage fails, Hermes still writes the text reply and the plugin falls back to local speech.
+If Chatterbox, Kokoro, or Storage fails, Hermes still writes the text reply and the plugin falls back to local speech.
 
 ## Closed-loop smoke test
 

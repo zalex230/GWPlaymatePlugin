@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import os
 import time
@@ -10,6 +11,7 @@ import unittest
 os.environ["GWPLAYMATE_DISABLE_MEMORY_WRITES"] = "1"
 
 import backend.hermes.daemon as hermes_daemon
+from backend.shared.models import CompanionReplyInsert
 from backend.hermes_daemon.daemon import (
     FILLER_OPENER_PATTERN,
     LOW_QUALITY_REPLY_PATTERNS,
@@ -22,6 +24,7 @@ from backend.hermes_daemon.daemon import (
     event_from_game_log,
     extract_json_object,
     fallback_rule_decision,
+    generate_tts_audio,
     gw_wiki_cache,
     gw_wiki_search_query,
     is_stale_polled_record,
@@ -38,6 +41,7 @@ from backend.hermes_daemon.daemon import (
     recent_conversation_context,
     recent_companion_context,
     recent_reply_texts,
+    reply_expression,
     sanitize_memory_for_prompt,
     should_flush_memory_buffer,
     should_use_ollama_for_event,
@@ -118,6 +122,79 @@ class HermesDaemonTests(unittest.TestCase):
         parsed = extract_json_object('Decision: {"should_speak": false, "response": ""}')
 
         self.assertFalse(parsed["should_speak"])
+
+    def test_reply_expression_classifies_common_azele_moods(self) -> None:
+        self.assertEqual(reply_expression("If Charr show, we do not hesitate."), "angry")
+        self.assertEqual(reply_expression("Someone's down. Move, I can cover.", "HIGH"), "worried")
+        self.assertEqual(reply_expression("I know. Still nice to hear."), "confident")
+        self.assertEqual(reply_expression("That was a little funny. A little."), "teasing")
+        self.assertEqual(reply_expression("I’m here. What are we doing?"), "neutral")
+
+    def test_chatterbox_tts_payload_includes_expression_controls(self) -> None:
+        original_settings = hermes_daemon.settings
+        try:
+            hermes_daemon.settings = replace(
+                original_settings,
+                chatterbox_tts_voice_sample="/tmp/azele.wav",
+                chatterbox_tts_format="wav",
+                chatterbox_tts_exaggeration=0.9,
+                chatterbox_tts_temperature=0.6,
+            )
+
+            payload = hermes_daemon._chatterbox_tts_payload("That was funny.", expression="teasing")
+
+            self.assertEqual(payload["input"], "That was funny.")
+            self.assertEqual(payload["voice_sample_path"], "/tmp/azele.wav")
+            self.assertEqual(payload["response_format"], "wav")
+            self.assertEqual(payload["expression"], "teasing")
+            self.assertEqual(payload["exaggeration"], 0.9)
+            self.assertEqual(payload["temperature"], 0.6)
+            self.assertIn("[chuckle]", payload["paralinguistic_tags"])
+        finally:
+            hermes_daemon.settings = original_settings
+
+    def test_chatterbox_tts_provider_falls_back_to_kokoro(self) -> None:
+        original_settings = hermes_daemon.settings
+        original_chatterbox = hermes_daemon.generate_chatterbox_turbo_audio
+        original_kokoro = hermes_daemon.generate_kokoro_audio
+        try:
+            hermes_daemon.settings = replace(
+                original_settings,
+                hermes_tts_provider="chatterbox-turbo",
+                chatterbox_tts_voice_sample="/tmp/azele.wav",
+                kokoro_tts_voice="af_bella",
+            )
+            hermes_daemon.generate_chatterbox_turbo_audio = lambda text, expression: None
+            hermes_daemon.generate_kokoro_audio = lambda text: (b"kokoro", "audio/mpeg")
+
+            self.assertEqual(
+                generate_tts_audio("hello", expression="neutral"),
+                (b"kokoro", "audio/mpeg", "kokoro", "af_bella"),
+            )
+
+            hermes_daemon.generate_chatterbox_turbo_audio = lambda text, expression: (b"turbo", "audio/wav")
+            self.assertEqual(
+                generate_tts_audio("hello", expression="happy"),
+                (b"turbo", "audio/wav", "chatterbox-turbo", "/tmp/azele.wav"),
+            )
+        finally:
+            hermes_daemon.settings = original_settings
+            hermes_daemon.generate_chatterbox_turbo_audio = original_chatterbox
+            hermes_daemon.generate_kokoro_audio = original_kokoro
+
+    def test_tts_metadata_keeps_expression_when_audio_disabled(self) -> None:
+        original_settings = hermes_daemon.settings
+        try:
+            hermes_daemon.settings = replace(original_settings, hermes_tts_provider="none")
+
+            reply = hermes_daemon.attach_tts_audio(
+                CompanionReplyInsert(persona="Azele", message="If Charr show, we do not hesitate.", urgency="NORMAL")
+            )
+
+            self.assertEqual(reply.metadata["expression"], "angry")
+            self.assertNotIn("audio_url", reply.metadata)
+        finally:
+            hermes_daemon.settings = original_settings
 
     def test_split_gw_chat_lines_uses_third_line_instead_of_clipping_second(self) -> None:
         text = (

@@ -147,6 +147,16 @@ LaunchAgent for Kokoro-FastAPI on `127.0.0.1:8880`; the storage script creates t
 bucket configured by `HERMES_TTS_STORAGE_BUCKET`. Keep `backend/.env` local because it contains
 service-role credentials.
 
+Experimental Chatterbox Turbo TTS can be installed with:
+
+```bash
+bash backend/scripts/install-chatterbox-turbo-launchagent.sh
+```
+
+Then set `HERMES_TTS_PROVIDER=chatterbox-turbo`, `CHATTERBOX_TTS_URL=http://127.0.0.1:4123/v1/audio/speech`,
+and `CHATTERBOX_TTS_VOICE_SAMPLE=/local/path/azele.wav`. Keep Kokoro installed as the fallback until
+Turbo latency and stability are benchmarked on the Mac Mini.
+
 ## Test
 
 ```powershell

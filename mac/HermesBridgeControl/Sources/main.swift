@@ -196,6 +196,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 name: "Kokoro TTS",
                 label: "com.gwplaymate.kokoro-fastapi",
                 plistPath: "\(NSHomeDirectory())/Library/LaunchAgents/com.gwplaymate.kokoro-fastapi.plist"
+            ),
+            LaunchService(
+                name: "Chatterbox Turbo TTS",
+                label: "com.gwplaymate.chatterbox-turbo",
+                plistPath: "\(NSHomeDirectory())/Library/LaunchAgents/com.gwplaymate.chatterbox-turbo.plist"
             )
         ]
     )

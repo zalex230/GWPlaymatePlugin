@@ -3007,6 +3007,25 @@ def _audio_mime_type(audio_format: str) -> str:
     return "audio/mpeg"
 
 
+def reply_expression(text: str, urgency: str = "NORMAL") -> str:
+    lowered = readable_game_text(text).lower()
+    if urgency.upper() == "HIGH" or re.search(r"\b(?:charr|hit|down|move|cover|danger|threat|wall)\b", lowered):
+        return "angry" if "charr" in lowered else "worried"
+    if re.search(r"\b(?:sorry|sad|miss|hurt|afraid|scared|worried|quiet)\b", lowered):
+        return "sad"
+    if re.search(r"\b(?:blush|embarrass|awkward|shut up|don'?t make a thing)\b", lowered):
+        return "embarrassed"
+    if re.search(r"\b(?:love|flirt|cute|hot|pretty|kiss|want me|admire|staring)\b", lowered):
+        return "flirty"
+    if re.search(r"\b(?:obviously|keep up|i know|impressive|ready|with you|good plan)\b", lowered):
+        return "confident"
+    if re.search(r"\b(?:funny|tease|brat|laugh|chuckle|sure you do|try again)\b", lowered):
+        return "teasing"
+    if re.search(r"\b(?:thanks|nice|good|glad|happy|finally)\b", lowered):
+        return "happy"
+    return "neutral"
+
+
 def _kokoro_tts_payload(text: str) -> dict[str, Any]:
     return {
         "model": settings.kokoro_tts_model,
@@ -3038,8 +3057,68 @@ def generate_kokoro_audio(text: str) -> tuple[bytes, str] | None:
     return audio, _audio_mime_type(settings.kokoro_tts_format)
 
 
-def _reply_audio_path(reply: CompanionReplyInsert) -> str:
-    extension = settings.kokoro_tts_format.strip().lower() or "mp3"
+def _chatterbox_tts_payload(text: str, *, expression: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "input": text,
+        "voice_sample_path": settings.chatterbox_tts_voice_sample,
+        "response_format": settings.chatterbox_tts_format,
+        "expression": expression,
+        "exaggeration": settings.chatterbox_tts_exaggeration,
+        "temperature": settings.chatterbox_tts_temperature,
+    }
+    if expression in {"teasing", "happy"}:
+        payload["paralinguistic_tags"] = ["[chuckle]"]
+    elif expression == "sad":
+        payload["paralinguistic_tags"] = ["[sigh]"]
+    elif expression == "worried":
+        payload["paralinguistic_tags"] = ["[gasp]"]
+    return payload
+
+
+def generate_chatterbox_turbo_audio(text: str, *, expression: str) -> tuple[bytes, str] | None:
+    if not text.strip():
+        return None
+
+    body = json.dumps(_chatterbox_tts_payload(text, expression=expression)).encode("utf-8")
+    request = urllib.request.Request(
+        settings.chatterbox_tts_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": _audio_mime_type(settings.chatterbox_tts_format),
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=settings.chatterbox_tts_timeout_seconds) as response:
+        status = getattr(response, "status", 200)
+        audio = response.read()
+    if status < 200 or status >= 300 or not audio:
+        return None
+    return audio, _audio_mime_type(settings.chatterbox_tts_format)
+
+
+def generate_tts_audio(text: str, *, expression: str) -> tuple[bytes, str, str, str] | None:
+    provider = settings.hermes_tts_provider
+    if provider in {"chatterbox-turbo", "chatterbox_turbo"}:
+        generated = generate_chatterbox_turbo_audio(text, expression=expression)
+        if generated:
+            audio, mime_type = generated
+            return audio, mime_type, "chatterbox-turbo", settings.chatterbox_tts_voice_sample
+        generated = generate_kokoro_audio(text)
+        if generated:
+            audio, mime_type = generated
+            return audio, mime_type, "kokoro", settings.kokoro_tts_voice
+        return None
+    if provider in {"kokoro", "kokoro-local"}:
+        generated = generate_kokoro_audio(text)
+        if generated:
+            audio, mime_type = generated
+            return audio, mime_type, provider, settings.kokoro_tts_voice
+    return None
+
+
+def _reply_audio_path(reply: CompanionReplyInsert, audio_format: str) -> str:
+    extension = audio_format.strip().lower() or "mp3"
     if extension == "mpeg":
         extension = "mp3"
     persona = re.sub(r"[^a-zA-Z0-9_-]+", "-", reply.persona.strip().lower()).strip("-") or "persona"
@@ -3060,19 +3139,21 @@ def _signed_url_value(response: Any) -> str | None:
 
 
 def attach_tts_audio(reply: CompanionReplyInsert) -> CompanionReplyInsert:
-    if settings.hermes_tts_provider not in {"kokoro", "kokoro-local"}:
+    expression = str(reply.metadata.get("expression") or reply_expression(reply.message, reply.urgency))
+    reply = reply.model_copy(update={"metadata": {**reply.metadata, "expression": expression}})
+    if settings.hermes_tts_provider not in {"kokoro", "kokoro-local", "chatterbox-turbo", "chatterbox_turbo"}:
         return reply
     if not _supabase_configured():
         return reply
 
     try:
-        generated = generate_kokoro_audio(reply.message)
+        generated = generate_tts_audio(reply.message, expression=expression)
         if not generated:
             return reply
-        audio, mime_type = generated
+        audio, mime_type, provider, voice = generated
         client = create_supabase_client(settings)
         bucket = settings.hermes_tts_storage_bucket
-        path = _reply_audio_path(reply)
+        path = _reply_audio_path(reply, settings.chatterbox_tts_format if provider == "chatterbox-turbo" else settings.kokoro_tts_format)
         storage = client.storage.from_(bucket)
         storage.upload(
             path=path,
@@ -3095,8 +3176,8 @@ def attach_tts_audio(reply: CompanionReplyInsert) -> CompanionReplyInsert:
                 time.time() + settings.hermes_tts_signed_url_seconds,
                 timezone.utc,
             ).isoformat(),
-            "tts_provider": settings.hermes_tts_provider,
-            "tts_voice": settings.kokoro_tts_voice,
+            "tts_provider": provider,
+            "tts_voice": voice,
         }
         return reply.model_copy(update={"metadata": metadata})
     except Exception as exc:
