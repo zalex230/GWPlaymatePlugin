@@ -120,6 +120,7 @@ private:
     struct QueuedReply {
         std::wstring message;
         std::string audio_url;
+        std::string audio_mime_type;
         bool multi_message = false;
         uint32_t line_index = 0;
         uint32_t line_count = 0;
@@ -131,6 +132,7 @@ private:
     struct QueuedTtsRequest {
         std::wstring message;
         std::string audio_url;
+        std::string audio_mime_type;
         uint32_t post_play_delay_ms = 0;
     };
 

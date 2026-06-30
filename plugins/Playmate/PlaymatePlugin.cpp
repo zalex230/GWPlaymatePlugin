@@ -532,7 +532,36 @@ namespace {
         return out;
     }
 
-    void PlayMp3Async(const std::filesystem::path& path)
+    std::string LowerAscii(std::string value)
+    {
+        std::ranges::transform(value, value.begin(), [](const unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        return value;
+    }
+
+    bool IsWavAudio(const std::filesystem::path& path, const std::string& mime_type)
+    {
+        const std::string lowered_mime = LowerAscii(mime_type);
+        if (lowered_mime == "audio/wav" || lowered_mime == "audio/wave" || lowered_mime == "audio/x-wav") {
+            return true;
+        }
+        return LowerAscii(path.extension().string()) == ".wav";
+    }
+
+    std::string AudioCacheExtension(const std::string& mime_type)
+    {
+        const std::string lowered_mime = LowerAscii(mime_type);
+        if (lowered_mime == "audio/wav" || lowered_mime == "audio/wave" || lowered_mime == "audio/x-wav") {
+            return ".wav";
+        }
+        if (lowered_mime == "audio/mpeg" || lowered_mime == "audio/mp3") {
+            return ".mp3";
+        }
+        return ".mp3";
+    }
+
+    void PlayAudioAsync(const std::filesystem::path& path, const std::string& mime_type = {})
     {
         using MciSendStringWFn = DWORD(WINAPI*)(LPCWSTR, LPWSTR, UINT, HWND);
         static HMODULE winmm = LoadLibraryW(L"winmm.dll");
@@ -553,7 +582,8 @@ namespace {
         }
 
         current_alias = L"PlaymateTts" + std::to_wstring(++alias_id);
-        const std::wstring open = L"open \"" + path.wstring() + L"\" type mpegvideo alias " + current_alias;
+        const std::wstring device_type = IsWavAudio(path, mime_type) ? L"waveaudio" : L"mpegvideo";
+        const std::wstring open = L"open \"" + path.wstring() + L"\" type " + device_type + L" alias " + current_alias;
         if (mci_send_string(open.c_str(), nullptr, 0, nullptr) != 0) {
             current_alias.clear();
             return;
@@ -1044,6 +1074,7 @@ void PlaymatePlugin::PollReplies()
                     QueueReply({
                         Utf8ToWide(reply.message),
                         reply.audio_url,
+                        reply.audio_mime_type,
                         reply.multi_message,
                         reply.line_index,
                         reply.line_count,
@@ -1056,7 +1087,7 @@ void PlaymatePlugin::PollReplies()
         else {
             for (const auto& reply : parsed.replies) {
                 if (!reply.empty()) {
-                    QueueReply({Utf8ToWide(reply), {}});
+                    QueueReply({Utf8ToWide(reply)});
                 }
             }
         }
@@ -1072,7 +1103,7 @@ void PlaymatePlugin::PollReplies()
         return;
     }
 
-    QueueReply({Utf8ToWide(content), {}});
+    QueueReply({Utf8ToWide(content)});
 }
 
 void PlaymatePlugin::QueueTelemetry(std::string event_type, std::string sender, std::string channel, std::string message)
@@ -1370,7 +1401,7 @@ void PlaymatePlugin::FlushRepliesToChat()
         }
         const auto persona = CurrentPersonaNameWide();
         ShowCompanionSpeechBubble(reply.message);
-        QueuedTtsRequest tts_request{reply.message, reply.audio_url};
+        QueuedTtsRequest tts_request{reply.message, reply.audio_url, reply.audio_mime_type};
         if (reply.multi_message && reply.line_count > reply.line_index) {
             tts_request.post_play_delay_ms = reply.post_play_delay_ms > 0
                 ? reply.post_play_delay_ms
@@ -1435,7 +1466,7 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const QueuedTtsRequest& request
     }
 
     if (!request.audio_url.empty()) {
-        const auto cache_key = std::format("{:x}.mp3", std::hash<std::string>{}(request.audio_url));
+        const auto cache_key = std::format("{:x}{}", std::hash<std::string>{}(request.audio_url), AudioCacheExtension(request.audio_mime_type));
         const auto audio_path = cache_dir / cache_key;
         if (!std::filesystem::exists(audio_path)) {
             std::string error;
@@ -1450,8 +1481,9 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const QueuedTtsRequest& request
         }
         if (std::filesystem::exists(audio_path)) {
             WaitForTtsPlaybackSlot();
-            GW::GameThread::Enqueue([audio_path] {
-                PlayMp3Async(audio_path);
+            const std::string audio_mime_type = request.audio_mime_type;
+            GW::GameThread::Enqueue([audio_path, audio_mime_type] {
+                PlayAudioAsync(audio_path, audio_mime_type);
             });
             MarkTtsPlaybackStarted(reply, request.post_play_delay_ms);
             return;
@@ -1504,7 +1536,7 @@ void PlaymatePlugin::GenerateAndPlayCompanionTts(const QueuedTtsRequest& request
 
     WaitForTtsPlaybackSlot();
     GW::GameThread::Enqueue([audio_path] {
-        PlayMp3Async(audio_path);
+        PlayAudioAsync(audio_path);
     });
     MarkTtsPlaybackStarted(reply, request.post_play_delay_ms);
 }

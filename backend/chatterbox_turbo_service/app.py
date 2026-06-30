@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import io
 import os
+import traceback
 from functools import lru_cache
 from typing import Any
 
@@ -54,10 +55,18 @@ def _device() -> str:
 @lru_cache(maxsize=1)
 def _load_model() -> Any:
     try:
-        from chatterbox.tts_turbo import ChatterboxTurboTTS
+        import chatterbox.tts_turbo as tts_turbo
     except Exception as exc:
         raise RuntimeError("chatterbox-tts with Turbo support is not installed") from exc
 
+    class _NoopWatermarker:
+        def apply_watermark(self, wav: Any, sample_rate: int) -> Any:
+            return wav
+
+    if getattr(tts_turbo.perth, "PerthImplicitWatermarker", None) is None:
+        tts_turbo.perth.PerthImplicitWatermarker = _NoopWatermarker
+
+    ChatterboxTurboTTS = tts_turbo.ChatterboxTurboTTS
     device = _device()
     try:
         return ChatterboxTurboTTS.from_pretrained(device=device, model_id=DEFAULT_MODEL_ID)
@@ -97,6 +106,10 @@ def _encode_wav(wav: Any, sample_rate: int) -> bytes:
     except Exception as exc:
         raise RuntimeError("torchaudio is required to encode Chatterbox output") from exc
 
+    if hasattr(wav, "detach"):
+        wav = wav.detach().cpu()
+    if getattr(wav, "ndim", 0) == 1:
+        wav = wav.unsqueeze(0)
     buffer = io.BytesIO()
     torchaudio.save(buffer, wav, sample_rate, format="wav")
     return buffer.getvalue()
@@ -121,8 +134,10 @@ def speech(request: SpeechRequest) -> Response:
         wav, sample_rate = _generate_wave(request)
         audio = _encode_wav(wav, sample_rate)
     except RuntimeError as exc:
+        traceback.print_exc()
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Chatterbox Turbo generation failed: {type(exc).__name__}") from exc
     if not audio:
         raise HTTPException(status_code=502, detail="Chatterbox Turbo returned empty audio")
