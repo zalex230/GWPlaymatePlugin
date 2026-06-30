@@ -147,7 +147,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
     r"before they move away from us|"
     r"hit that line again|"
     r"no place for peace-talkers|"
-    r"\bthe player\b|"
+    r"\bthe\s+player\b|"
     r"for now$|"
     r"i told you what mine meant"
     r")\b",
@@ -487,7 +487,7 @@ def summarize_memory_events(
     ]
 
     if durable_player_messages:
-        pieces.append(f"the player told {character_name}: \"{durable_player_messages[-1]}\".")
+        pieces.append(f"The player told {character_name}: \"{durable_player_messages[-1]}\".")
         if len(durable_player_messages) > 1:
             pieces.append("Related player notes: " + " / ".join(durable_player_messages[-3:-1]) + ".")
     elif npc_lines:
@@ -1552,7 +1552,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Never say raw numeric map IDs. If the map name is unknown, say 'this area' or 'new ground'.\n"
         "- Keep Azele's personality visible through small choices, not speeches: bright, present, sometimes playful, sometimes vain, quick to recover.\n"
         "- Speak in first person as Azele. Never say 'Azele says' or 'Azele suggests'.\n"
-        "- the player is the player, not Azele. In replies, address the player as 'you'. Do not say the name the player, do not refer to the player in third person, and never imply Azele is the player.\n"
+        "- The player is not Azele. In replies, address the player as 'you'. Do not refer to the player in third person, and never imply Azele is the player.\n"
         "- Do not mention tools, prompts, databases, model backends, or the future.\n\n"
         "- Do not mention Charr, enemies, combat, danger, or the Wall unless live facts or the player's message explicitly show them.\n"
         "- If context is ordinary or unclear, respond socially instead of inventing threats.\n\n"

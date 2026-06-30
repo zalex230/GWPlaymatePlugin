@@ -192,7 +192,7 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("do not make her sound overly mature", prompt.lower())
         self.assertIn("socially quick 22-year-old", prompt)
         self.assertIn("peace-talkers", prompt)
-        self.assertIn("the player is the player, not Azele", prompt)
+        self.assertIn("The player is not Azele", prompt)
         self.assertIn("address the player as 'you'", prompt)
         self.assertIn("made Azele drink Dwarven Ale", prompt)
         self.assertIn("react directly to how it feels", prompt)
@@ -1405,37 +1405,23 @@ class HermesDaemonTests(unittest.TestCase):
         reason = should_flush_memory_buffer(deque([memory_event]), memory_event, last_write_at=time.time())
         self.assertEqual(reason, "durable_player_note")
 
-    def test_azele_persona_loads_personal_memory_doc(self) -> None:
-        notes = persona_living_notes("Azele")
+    def test_missing_persona_docs_are_optional_local_files(self) -> None:
+        self.assertEqual(persona_living_notes("Persona Without Local Docs"), "")
+
+    def test_persona_living_notes_loads_optional_local_lore_doc(self) -> None:
+        path = hermes_daemon.PERSONA_MEMORY_DIR / "test-persona-local-docs.lore.md"
+        try:
+            path.write_text(
+                "# Test Persona world memory notes\n\n"
+                "- This is local lore that should not need to be committed.\n",
+                encoding="utf-8",
+            )
+            notes = persona_living_notes("Test Persona Local Docs")
+        finally:
+            path.unlink(missing_ok=True)
 
         self.assertIn("World memory notes", notes)
-        self.assertIn("pre-Searing Ascalon world memory", notes)
-        self.assertIn("Do not invent \"rumors\"", notes)
-        self.assertIn("Personal memory notes", notes)
-        self.assertIn("About the player", notes)
-        self.assertIn("listen to the current exchange first", notes)
-
-    def test_azele_prompt_includes_pre_searing_lore_memory(self) -> None:
-        event = event_from_game_log(
-            {
-                "sender": "Player",
-                "channel": "party",
-                "message": "what do you know about Regent Valley?",
-                "metadata": {
-                    "event_type": "player_chat",
-                    "persona": "Azele",
-                    "map_id": 168,
-                    "map_name": "Regent Valley",
-                },
-            }
-        )
-
-        prompt = build_character_reply_prompt(event)
-
-        self.assertIn("pre-Searing Ascalon world memory", prompt)
-        self.assertIn("Regent Valley is lush forest and river country", prompt)
-        self.assertIn("King's Watch", prompt)
-        self.assertIn("Do not invent \"rumors\"", prompt)
+        self.assertIn("local lore that should not need to be committed", notes)
 
     def test_prompt_memory_filter_skips_noisy_legacy_session_summaries(self) -> None:
         memories = [
@@ -1450,7 +1436,7 @@ class HermesDaemonTests(unittest.TestCase):
                 character_name="Azele",
                 memory_type="relationship_note",
                 title="Azele session: relationship note",
-                summary_text='the player told Azele: "remember that I like checking every hidden stash".',
+                summary_text='The player told Azele: "remember that I like checking every hidden stash".',
                 tags=["relationship", "player_preference"],
                 metadata={"notability": ["durable_player_note"], "source": "hermes_memory_writer"},
             ),
