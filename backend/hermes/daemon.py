@@ -3218,11 +3218,11 @@ def handle_event_sync(event: TelemetryEvent, *, record_id: int | None = None, us
 
 
 def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ollama: bool = False) -> list[CompanionReplyInsert]:
-    generation_started_at = time.time()
     with world_state_lock:
         if should_ignore_radar_alert(event):
             return []
         world_state.apply_event(event)
+        player_chat_at_generation_start = world_state.last_player_chat_at
 
         is_direct_player_chat = event.event_type == "player_chat" and event.channel == "party"
         is_emergency_alert = event.event_type == "environment_alert" and event.alert_type in EMERGENCY_ALERT_TYPES
@@ -3293,7 +3293,7 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
         decision = fallback_rule_decision(event)
     if event.event_type in MAP_COMMENT_EVENT_TYPES or is_ambient_snapshot_event(event):
         with world_state_lock:
-            if world_state.last_player_chat_at > generation_started_at:
+            if world_state.last_player_chat_at > player_chat_at_generation_start:
                 return []
     replies = replies_from_decision(
         decision,
