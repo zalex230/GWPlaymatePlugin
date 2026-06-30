@@ -1732,6 +1732,7 @@ def replies_from_decision(
     lines = split_gw_chat_lines(decision.response)
     replies: list[CompanionReplyInsert] = []
     total = len(lines)
+    decision_expression = reply_expression(decision.response, decision.urgency)
     for index, line in enumerate(lines):
         line_decision = HermesDecision(
             should_speak=decision.should_speak,
@@ -1745,6 +1746,7 @@ def replies_from_decision(
             trigger_log_id=trigger_log_id if index == 0 else None,
         )
         if reply:
+            reply.metadata["expression"] = decision_expression
             if total > 1:
                 reply.metadata["multi_message"] = True
                 reply.metadata["line_index"] = index + 1
@@ -3007,9 +3009,60 @@ def _audio_mime_type(audio_format: str) -> str:
     return "audio/mpeg"
 
 
+TTS_EXPRESSION_PROFILES: dict[str, dict[str, Any]] = {
+    "neutral": {"tags": [], "temperature": 0.78, "exaggeration": 0.0},
+    "happy": {"tags": ["[happy]", "[chuckle]"], "temperature": 0.86, "exaggeration": 0.35},
+    "teasing": {"tags": ["[teasing]", "[chuckle]"], "temperature": 0.9, "exaggeration": 0.45},
+    "flirty": {"tags": ["[softly]", "[chuckle]"], "temperature": 0.88, "exaggeration": 0.5},
+    "confident": {"tags": ["[confident]"], "temperature": 0.8, "exaggeration": 0.25},
+    "annoyed": {"tags": ["[annoyed]"], "temperature": 0.84, "exaggeration": 0.45},
+    "angry": {"tags": ["[angry]"], "temperature": 0.92, "exaggeration": 0.65},
+    "worried": {"tags": ["[worried]", "[gasp]"], "temperature": 0.86, "exaggeration": 0.55},
+    "sad": {"tags": ["[sad]", "[sigh]"], "temperature": 0.72, "exaggeration": 0.4},
+    "embarrassed": {"tags": ["[embarrassed]", "[sigh]"], "temperature": 0.82, "exaggeration": 0.4},
+}
+
+
+EXPRESSION_ALIASES = {
+    "anger": "angry",
+    "irritated": "annoyed",
+    "irritation": "annoyed",
+    "worry": "worried",
+    "fear": "worried",
+    "scared": "worried",
+    "afraid": "worried",
+    "playful": "teasing",
+    "tease": "teasing",
+    "flirt": "flirty",
+    "romantic": "flirty",
+    "shy": "embarrassed",
+    "embarrass": "embarrassed",
+}
+
+
+def normalize_expression(expression: str) -> str:
+    normalized = expression.strip().lower().replace("_", "-")
+    normalized = EXPRESSION_ALIASES.get(normalized, normalized)
+    return normalized if normalized in TTS_EXPRESSION_PROFILES else "neutral"
+
+
+def tts_expression_profile(expression: str) -> dict[str, Any]:
+    normalized = normalize_expression(expression)
+    profile = dict(TTS_EXPRESSION_PROFILES[normalized])
+    profile["expression"] = normalized
+    return profile
+
+
 def reply_expression(text: str, urgency: str = "NORMAL") -> str:
     lowered = readable_game_text(text).lower()
-    if urgency.upper() == "HIGH" or re.search(r"\b(?:charr|hit|down|move|cover|danger|threat|wall)\b", lowered):
+    if re.search(
+        r"\b(?:charr|threat|kill|furious|angry|hate|burn|enemy|fight them|do not hesitate|hold the line|breach|advance|through (?:the )?gate)\b",
+        lowered,
+    ):
+        return "angry"
+    if re.search(r"\b(?:annoy|seriously|really\?|ugh|stop it|not funny|try not to|don'?t make me|keep up)\b", lowered):
+        return "annoyed"
+    if urgency.upper() == "HIGH" or re.search(r"\b(?:hit|down|move|cover|danger|careful|trouble|hurt|help|run|close)\b", lowered):
         return "angry" if "charr" in lowered else "worried"
     if re.search(r"\b(?:sorry|sad|miss|hurt|afraid|scared|worried|quiet)\b", lowered):
         return "sad"
@@ -3058,20 +3111,18 @@ def generate_kokoro_audio(text: str) -> tuple[bytes, str] | None:
 
 
 def _chatterbox_tts_payload(text: str, *, expression: str) -> dict[str, Any]:
+    profile = tts_expression_profile(expression)
     payload: dict[str, Any] = {
         "input": text,
         "voice_sample_path": settings.chatterbox_tts_voice_sample,
         "response_format": settings.chatterbox_tts_format,
-        "expression": expression,
-        "exaggeration": settings.chatterbox_tts_exaggeration,
-        "temperature": settings.chatterbox_tts_temperature,
+        "expression": profile["expression"],
+        "exaggeration": profile.get("exaggeration", settings.chatterbox_tts_exaggeration),
+        "temperature": profile.get("temperature", settings.chatterbox_tts_temperature),
     }
-    if expression in {"teasing", "happy"}:
-        payload["paralinguistic_tags"] = ["[chuckle]"]
-    elif expression == "sad":
-        payload["paralinguistic_tags"] = ["[sigh]"]
-    elif expression == "worried":
-        payload["paralinguistic_tags"] = ["[gasp]"]
+    tags = [str(tag) for tag in profile.get("tags", []) if str(tag).strip()]
+    if tags:
+        payload["paralinguistic_tags"] = tags
     return payload
 
 
@@ -3139,8 +3190,17 @@ def _signed_url_value(response: Any) -> str | None:
 
 
 def attach_tts_audio(reply: CompanionReplyInsert) -> CompanionReplyInsert:
-    expression = str(reply.metadata.get("expression") or reply_expression(reply.message, reply.urgency))
-    reply = reply.model_copy(update={"metadata": {**reply.metadata, "expression": expression}})
+    expression = normalize_expression(str(reply.metadata.get("expression") or reply_expression(reply.message, reply.urgency)))
+    profile = tts_expression_profile(expression)
+    reply = reply.model_copy(
+        update={
+            "metadata": {
+                **reply.metadata,
+                "expression": expression,
+                "tts_expression_profile": profile,
+            }
+        }
+    )
     if settings.hermes_tts_provider not in {"kokoro", "kokoro-local", "chatterbox-turbo", "chatterbox_turbo"}:
         return reply
     if not _supabase_configured():

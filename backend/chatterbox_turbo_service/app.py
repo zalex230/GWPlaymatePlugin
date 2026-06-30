@@ -18,11 +18,15 @@ DEFAULT_VOICE_SAMPLE = os.getenv("CHATTERBOX_TTS_VOICE_SAMPLE", "")
 PRELOAD_MODEL = os.getenv("CHATTERBOX_TTS_PRELOAD", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 EXPRESSION_TAGS = {
-    "happy": "[chuckle]",
-    "teasing": "[chuckle]",
-    "sad": "[sigh]",
-    "worried": "[gasp]",
-    "embarrassed": "[sigh]",
+    "happy": "[happy] [chuckle]",
+    "teasing": "[teasing] [chuckle]",
+    "flirty": "[softly] [chuckle]",
+    "confident": "[confident]",
+    "annoyed": "[annoyed]",
+    "angry": "[angry]",
+    "sad": "[sad] [sigh]",
+    "worried": "[worried] [gasp]",
+    "embarrassed": "[embarrassed] [sigh]",
 }
 
 
@@ -109,8 +113,6 @@ def _generate_wave(request: SpeechRequest) -> tuple[Any, int]:
         kwargs["audio_prompt_path"] = audio_prompt_path
     if "temperature" in signature.parameters and request.temperature is not None:
         kwargs["temperature"] = request.temperature
-    if "exaggeration" in signature.parameters and request.exaggeration is not None:
-        kwargs["exaggeration"] = request.exaggeration
     wav = model.generate(text, **kwargs)
     sample_rate = int(getattr(model, "sr", 24000))
     return wav, sample_rate

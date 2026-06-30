@@ -126,8 +126,12 @@ class HermesDaemonTests(unittest.TestCase):
     def test_reply_expression_classifies_common_azele_moods(self) -> None:
         self.assertEqual(reply_expression("If Charr show, we do not hesitate."), "angry")
         self.assertEqual(reply_expression("Someone's down. Move, I can cover.", "HIGH"), "worried")
+        self.assertEqual(reply_expression("Hold the line until help arrives from Ascalon City."), "angry")
         self.assertEqual(reply_expression("I know. Still nice to hear."), "confident")
         self.assertEqual(reply_expression("That was a little funny. A little."), "teasing")
+        self.assertEqual(reply_expression("Seriously? Try not to make me say it twice."), "annoyed")
+        self.assertEqual(reply_expression("You think I look pretty like this?"), "flirty")
+        self.assertEqual(reply_expression("I’m glad you asked."), "happy")
         self.assertEqual(reply_expression("I’m here. What are we doing?"), "neutral")
 
     def test_chatterbox_tts_payload_includes_expression_controls(self) -> None:
@@ -147,11 +151,23 @@ class HermesDaemonTests(unittest.TestCase):
             self.assertEqual(payload["voice_sample_path"], "/tmp/azele.wav")
             self.assertEqual(payload["response_format"], "wav")
             self.assertEqual(payload["expression"], "teasing")
-            self.assertEqual(payload["exaggeration"], 0.9)
-            self.assertEqual(payload["temperature"], 0.6)
+            self.assertEqual(payload["exaggeration"], 0.45)
+            self.assertEqual(payload["temperature"], 0.9)
+            self.assertIn("[teasing]", payload["paralinguistic_tags"])
             self.assertIn("[chuckle]", payload["paralinguistic_tags"])
         finally:
             hermes_daemon.settings = original_settings
+
+    def test_chatterbox_tts_payload_uses_distinct_mood_profiles(self) -> None:
+        angry = hermes_daemon._chatterbox_tts_payload("Charr at the gate.", expression="angry")
+        flirty = hermes_daemon._chatterbox_tts_payload("You noticed?", expression="flirty")
+        worried = hermes_daemon._chatterbox_tts_payload("Someone is down.", expression="worried")
+
+        self.assertEqual(angry["expression"], "angry")
+        self.assertIn("[angry]", angry["paralinguistic_tags"])
+        self.assertGreater(angry["temperature"], hermes_daemon._chatterbox_tts_payload("Fine.", expression="sad")["temperature"])
+        self.assertIn("[softly]", flirty["paralinguistic_tags"])
+        self.assertIn("[gasp]", worried["paralinguistic_tags"])
 
     def test_chatterbox_tts_provider_falls_back_to_kokoro(self) -> None:
         original_settings = hermes_daemon.settings
@@ -192,6 +208,8 @@ class HermesDaemonTests(unittest.TestCase):
             )
 
             self.assertEqual(reply.metadata["expression"], "angry")
+            self.assertEqual(reply.metadata["tts_expression_profile"]["expression"], "angry")
+            self.assertIn("[angry]", reply.metadata["tts_expression_profile"]["tags"])
             self.assertNotIn("audio_url", reply.metadata)
         finally:
             hermes_daemon.settings = original_settings
@@ -225,6 +243,22 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual([reply.metadata["line_index"] for reply in replies], [1, 2, 3])
         self.assertTrue(replies[1].metadata["reply_delay_ms"] >= hermes_daemon.MULTI_MESSAGE_MIN_REPLY_DELAY_MS)
         self.assertTrue(replies[0].metadata["post_play_delay_ms"] >= hermes_daemon.MULTI_MESSAGE_MIN_REPLY_DELAY_MS)
+
+    def test_multi_line_replies_inherit_full_response_expression(self) -> None:
+        decision = hermes_daemon.HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="NORMAL",
+            response=(
+                "If the Charr breach that gate, we move fast toward Ascalon before the city is threatened. "
+                "Stopping their advance is our job right now, not something we discuss later."
+            ),
+        )
+
+        replies = hermes_daemon.replies_from_decision(decision, persona="Azele", session_id="emotion-test")
+
+        self.assertGreater(len(replies), 1)
+        self.assertEqual({reply.metadata["expression"] for reply in replies}, {"angry"})
 
     def test_fallback_rule_replies_to_party_chat(self) -> None:
         decision = fallback_rule_decision(
