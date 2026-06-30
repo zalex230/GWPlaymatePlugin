@@ -19,7 +19,7 @@ fi
 mkdir -p "$SERVICE_ROOT/logs" "$HOME/Library/LaunchAgents"
 cd "$SERVICE_ROOT"
 
-"$UV_BIN" venv --python 3.11
+"$UV_BIN" venv --python 3.11 --allow-existing
 "$UV_BIN" pip install fastapi==0.115.8 uvicorn==0.34.0 pydantic==2.10.6
 "$UV_BIN" pip install chatterbox-tts torch torchaudio
 
@@ -66,6 +66,8 @@ cat > "$PLIST_PATH" <<PLIST
     <string>$DEVICE</string>
     <key>CHATTERBOX_TTS_VOICE_SAMPLE</key>
     <string>$VOICE_SAMPLE</string>
+    <key>CHATTERBOX_TTS_PRELOAD</key>
+    <string>true</string>
     <key>PYTHONUNBUFFERED</key>
     <string>1</string>
   </dict>

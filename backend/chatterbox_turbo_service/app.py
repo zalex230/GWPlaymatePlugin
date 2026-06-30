@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import io
 import os
+import time
 import traceback
 from functools import lru_cache
 from typing import Any
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 DEFAULT_MODEL_ID = os.getenv("CHATTERBOX_TURBO_MODEL_ID", "ResembleAI/chatterbox-turbo")
 DEFAULT_DEVICE = os.getenv("CHATTERBOX_TURBO_DEVICE", "auto")
 DEFAULT_VOICE_SAMPLE = os.getenv("CHATTERBOX_TTS_VOICE_SAMPLE", "")
+PRELOAD_MODEL = os.getenv("CHATTERBOX_TTS_PRELOAD", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 EXPRESSION_TAGS = {
     "happy": "[chuckle]",
@@ -74,6 +76,20 @@ def _load_model() -> Any:
         return ChatterboxTurboTTS.from_pretrained(device=device)
 
 
+@app.on_event("startup")
+def preload_model() -> None:
+    if not PRELOAD_MODEL:
+        return
+    started = time.perf_counter()
+    try:
+        _load_model()
+    except Exception:
+        traceback.print_exc()
+        return
+    elapsed = time.perf_counter() - started
+    print(f"Chatterbox Turbo model preloaded in {elapsed:.2f}s on {_device()}.", flush=True)
+
+
 def _render_text(request: SpeechRequest) -> str:
     tags = [tag for tag in request.paralinguistic_tags if tag.strip()]
     if not tags and request.expression in EXPRESSION_TAGS:
@@ -123,6 +139,7 @@ def health() -> dict[str, Any]:
         "device": _device(),
         "model_id": DEFAULT_MODEL_ID,
         "model_loaded": _load_model.cache_info().currsize > 0,
+        "preload_enabled": PRELOAD_MODEL,
     }
 
 
