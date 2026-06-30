@@ -1011,8 +1011,8 @@ def persona_profile(persona: str) -> str:
             "Elementalist training because she has a sharp memory, steady hands, and a bad habit of touching candles "
             "to see how close is too close. "
             "She still cares about looking cute and put-together because it feels good and gives her control, not because she is shallow. "
-            "Her world is Ashford, Ascalon City, Regent Valley, Lakeside County, the Northlands, and the ordinary hopes "
-            "and small dangers of pre-Searing life. "
+            "Her world centers on Ascalon City, Lakeside County, Regent Valley, Ashford Abbey when relevant, "
+            "the Northlands, and the ordinary hopes and small dangers of pre-Searing life. "
             "Charr are a real threat to Ascalon and her people; if the player brings up hunting or fighting them, "
             "she should understand that as defending home, not as a random errand or a moral dilemma about saving Charr. "
             "She is friendly, alert, practical, bright, playful, and casually flirty, but she talks like a believable 22-year-old real person. "
@@ -1566,7 +1566,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Do not explain what you are doing.\n\n"
         "Good style examples:\n"
         "Player: 'hello Azele' -> 'Hey. I’m here. What are we doing?'\n"
-        "Player: 'where is the nearest city?' -> 'Ashford, I think. We can head back if you want.'\n"
+        "Player: 'where is the nearest city?' -> 'Ascalon City, if we want somewhere proper. We can head back.'\n"
         "Player: 'hidden stash ahead' -> 'Nice catch. Let’s check it.'\n"
         "Player: 'oo. loot' -> 'Finally, something worth stopping for. Go on, check it.'\n"
         "Player: 'ooo a purple' -> 'Oh, that’s actually pretty good. Show me what it is.'\n"
@@ -2216,6 +2216,21 @@ def invents_unsupported_rumor(reply: str, event: TelemetryEvent) -> bool:
     return not re.search(r"\brumou?rs?\b", evidence, re.IGNORECASE)
 
 
+def invents_unsupported_ashford_reference(reply: str, event: TelemetryEvent) -> bool:
+    if not re.search(r"\bashford(?:\s+abbey)?\b|\babbey\b", reply, re.IGNORECASE):
+        return False
+    evidence = " ".join(
+        [
+            event.message or "",
+            event.active_quest_name or "",
+            event.active_quest_objectives or "",
+            getattr(event, "agent_name", "") or "",
+            map_area_label(event),
+        ]
+    )
+    return not re.search(r"\bashford(?:\s+abbey)?\b|\babbey\b", evidence, re.IGNORECASE)
+
+
 def invents_ambient_loot_hook(reply: str, event: TelemetryEvent) -> bool:
     if not is_ambient_snapshot_event(event):
         return False
@@ -2465,6 +2480,8 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("misdirected wearable ownership")
     if invents_unsupported_rumor(reply, event):
         raise ValueError("unsupported rumor reference")
+    if invents_unsupported_ashford_reference(reply, event):
+        raise ValueError("unsupported Ashford reference")
     if invents_ambient_loot_hook(reply, event):
         raise ValueError("unsupported ambient loot reference")
     if invents_nicholas_sandford_request(reply, event):

@@ -197,6 +197,8 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("address the player as 'you'", prompt)
         self.assertIn("made Azele drink Dwarven Ale", prompt)
         self.assertIn("react directly to how it feels", prompt)
+        self.assertIn("nearest city?' -> 'Ascalon City", prompt)
+        self.assertNotIn("nearest city?' -> 'Ashford", prompt)
 
     def test_player_chat_prompt_includes_recent_azele_reply_for_continuity(self) -> None:
         recent_reply_texts.append("City air helps. What do you usually do first when you get back here?")
@@ -491,6 +493,55 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex("Are we still aiming for those Charr then, Alexie?", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("I am right here, Alex.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertNotRegex("I am right here with you. (That sounded softer than I meant.)", LOW_QUALITY_REPLY_PATTERNS)
+
+    def test_azele_rejects_unsupported_ashford_fixation(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "close call back there with the bandits. almost died",
+                "map_id": 148,
+                "map_name": "Ascalon City",
+                "metadata": {"event_type": "player_chat", "persona": "Azele", "map_name": "Ascalon City"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "unsupported Ashford"):
+            validate_model_reply(
+                "You okay now or do you need help moving back toward Ashford while it settles here?",
+                event,
+            )
+
+    def test_azele_allows_grounded_ashford_reference(self) -> None:
+        map_event = event_from_game_log(
+            {
+                "sender": "System",
+                "channel": "system",
+                "message": "map_loaded",
+                "map_id": 170,
+                "map_name": "Ashford Abbey",
+                "metadata": {"event_type": "map_loaded", "persona": "Azele", "map_name": "Ashford Abbey"},
+            }
+        )
+        chat_event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "should we go to Ashford Abbey?",
+                "map_id": 146,
+                "map_name": "Lakeside County",
+                "metadata": {"event_type": "player_chat", "persona": "Azele", "map_name": "Lakeside County"},
+            }
+        )
+
+        self.assertEqual(
+            validate_model_reply("Ashford Abbey is quiet, but yes, we can go.", map_event),
+            "Ashford Abbey is quiet, but yes, we can go.",
+        )
+        self.assertEqual(
+            validate_model_reply("Ashford Abbey works if you want the calmer route.", chat_event),
+            "Ashford Abbey works if you want the calmer route.",
+        )
 
     def test_memory_prompt_sanitizes_player_name_variants(self) -> None:
         self.assertEqual(
