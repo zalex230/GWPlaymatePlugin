@@ -5,6 +5,14 @@ struct LaunchService {
     let name: String
     let label: String
     let plistPath: String
+    let provider: String?
+
+    init(name: String, label: String, plistPath: String, provider: String? = nil) {
+        self.name = name
+        self.label = label
+        self.plistPath = plistPath
+        self.provider = provider
+    }
 }
 
 final class CommandRunner {
@@ -42,10 +50,12 @@ final class LaunchAgentController {
     }
 
     func statusText() -> String {
-        services.map { service in
+        var lines = ["Active TTS: \(activeTtsDescription())"]
+        lines.append(contentsOf: services.map { service in
             let loaded = isLoaded(service)
-            return "\(service.name): \(loaded ? "Running" : "Stopped")"
-        }.joined(separator: "\n")
+            return "\(service.name)\(serviceRoleSuffix(service)): \(loaded ? "Running" : "Stopped")"
+        })
+        return lines.joined(separator: "\n")
     }
 
     func start(_ service: LaunchService) {
@@ -68,17 +78,77 @@ final class LaunchAgentController {
     }
 
     func startBridge() {
-        services.forEach(start)
+        bridgeServices().forEach(start)
     }
 
     func stopBridge() {
-        services.reversed().forEach(stop)
+        bridgeServices().reversed().forEach(stop)
     }
 
     func restartHermes() {
         if let hermes = services.first(where: { $0.label == "com.gwplaymate.hermes-daemon" }) {
             restart(hermes)
         }
+    }
+
+    private func bridgeServices() -> [LaunchService] {
+        services.filter { service in
+            service.provider == nil || service.provider == activeTtsProvider()
+        }
+    }
+
+    private func activeTtsProvider() -> String {
+        EnvConfig.hermesTtsProvider()
+    }
+
+    private func activeTtsService() -> LaunchService? {
+        let provider = activeTtsProvider()
+        return services.first { $0.provider == provider }
+    }
+
+    private func activeTtsDescription() -> String {
+        let provider = activeTtsProvider()
+        if provider == "none" {
+            return "None"
+        }
+        return activeTtsService()?.name ?? provider
+    }
+
+    private func serviceRoleSuffix(_ service: LaunchService) -> String {
+        guard let provider = service.provider else {
+            return ""
+        }
+        return provider == activeTtsProvider() ? " (active)" : " (fallback)"
+    }
+}
+
+enum EnvConfig {
+    static func hermesTtsProvider() -> String {
+        if let value = value(for: "HERMES_TTS_PROVIDER") {
+            return value.lowercased()
+        }
+        return ProcessInfo.processInfo.environment["HERMES_TTS_PROVIDER"]?.lowercased() ?? "none"
+    }
+
+    private static func value(for key: String) -> String? {
+        let path = "\(NSHomeDirectory())/Documents/GWPlaymatePlugin/backend/.env"
+        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+            return nil
+        }
+        for rawLine in contents.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.hasPrefix("#") {
+                continue
+            }
+            let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            if parts.count != 2 || parts[0] != key {
+                continue
+            }
+            return String(parts[1])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        }
+        return nil
     }
 }
 
@@ -89,7 +159,7 @@ final class MainWindowController: NSWindowController {
     init(controller: LaunchAgentController) {
         self.controller = controller
 
-        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 220))
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 250))
         let window = NSWindow(
             contentRect: contentView.frame,
             styleMask: [.titled, .closable, .miniaturizable],
@@ -195,12 +265,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             LaunchService(
                 name: "Kokoro TTS",
                 label: "com.gwplaymate.kokoro-fastapi",
-                plistPath: "\(NSHomeDirectory())/Library/LaunchAgents/com.gwplaymate.kokoro-fastapi.plist"
+                plistPath: "\(NSHomeDirectory())/Library/LaunchAgents/com.gwplaymate.kokoro-fastapi.plist",
+                provider: "kokoro"
             ),
             LaunchService(
                 name: "Chatterbox Turbo TTS",
                 label: "com.gwplaymate.chatterbox-turbo",
-                plistPath: "\(NSHomeDirectory())/Library/LaunchAgents/com.gwplaymate.chatterbox-turbo.plist"
+                plistPath: "\(NSHomeDirectory())/Library/LaunchAgents/com.gwplaymate.chatterbox-turbo.plist",
+                provider: "chatterbox-turbo"
             )
         ]
     )
