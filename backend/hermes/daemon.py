@@ -3158,6 +3158,24 @@ def reply_exists_for_log(log_id: int) -> bool:
     return bool(response.data)
 
 
+def reply_exists_for_environment_alert(alert_id: int) -> bool:
+    if not _supabase_configured():
+        return False
+    client = create_supabase_client(settings)
+    response = (
+        client.table(COMPANION_REPLIES_TABLE)
+        .select("id,payload")
+        .order("created_at", desc=True)
+        .limit(200)
+        .execute()
+    )
+    for row in response.data or []:
+        payload = row.get("payload") or {}
+        if payload.get("trigger_environment_alert_id") == alert_id:
+            return True
+    return False
+
+
 async def handle_game_log_payload(payload: dict[str, Any], *, use_ollama: bool = False) -> None:
     record = payload.get("record") or payload
     if (record.get("payload") or {}).get("direct_hermes_forwarded"):
@@ -3176,11 +3194,14 @@ async def handle_environment_alert_payload(payload: dict[str, Any], *, use_ollam
     record = payload.get("record") or payload
     if (record.get("payload") or {}).get("direct_hermes_forwarded"):
         return
+    alert_id = record.get("id")
+    if isinstance(alert_id, int) and await asyncio.to_thread(reply_exists_for_environment_alert, alert_id):
+        return
     try:
         event = event_from_environment_alert(record)
     except Exception:
         return
-    await handle_event(event, record_id=record.get("id"), use_ollama=use_ollama)
+    await handle_event(event, record_id=alert_id, use_ollama=use_ollama)
 
 
 async def handle_event(event: TelemetryEvent, *, record_id: int | None = None, use_ollama: bool = False) -> None:
@@ -3282,6 +3303,9 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
     )
     if not replies:
         return []
+    if event.event_type == "environment_alert" and isinstance(record_id, int):
+        for reply in replies:
+            reply.metadata["trigger_environment_alert_id"] = record_id
 
     with world_state_lock:
         for reply in replies:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from datetime import datetime, timedelta, timezone
 import os
@@ -1883,6 +1884,50 @@ class HermesDaemonTests(unittest.TestCase):
         )
 
         self.assertEqual([reply.message for reply in replies], ["On Charr Axe Fiend. Stay close."])
+
+    def test_environment_alert_reply_records_source_alert_id(self) -> None:
+        replies = process_event(
+            event_from_environment_alert(
+                {
+                    "id": 5,
+                    "alert_type": "combat_started",
+                    "severity": "HIGH",
+                    "message": "Combat started with selected target selected.",
+                    "distance": 650,
+                    "payload": {
+                        "persona": "Azele",
+                        "agent_id": 16,
+                        "hostile_count": 2,
+                        "close_hostile_count": 1,
+                        "closest_hostile_distance": 650,
+                    },
+                }
+            ),
+            record_id=5,
+            use_ollama=False,
+        )
+
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0].metadata["trigger_environment_alert_id"], 5)
+        self.assertIsNone(replies[0].trigger_log_id)
+
+    def test_environment_alert_handler_skips_alert_with_existing_reply(self) -> None:
+        original_exists = hermes_daemon.reply_exists_for_environment_alert
+        original_handle_event = hermes_daemon.handle_event
+        calls: list[int] = []
+
+        async def fail_if_called(*args: object, **kwargs: object) -> None:
+            calls.append(1)
+
+        hermes_daemon.reply_exists_for_environment_alert = lambda alert_id: alert_id == 5
+        hermes_daemon.handle_event = fail_if_called
+        try:
+            asyncio.run(hermes_daemon.handle_environment_alert_payload({"record": {"id": 5, "payload": {}}}))
+        finally:
+            hermes_daemon.reply_exists_for_environment_alert = original_exists
+            hermes_daemon.handle_event = original_handle_event
+
+        self.assertEqual(calls, [])
 
     def test_target_change_without_target_or_visible_enemy_is_silent(self) -> None:
         replies = process_event(

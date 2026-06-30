@@ -12,6 +12,7 @@ bin/
 build/
 build-*/
 out/
+mac/HermesBridgeControl/build/
 .vs/
 *.dll
 *.exe
