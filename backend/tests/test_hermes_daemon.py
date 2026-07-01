@@ -208,6 +208,16 @@ class HermesDaemonTests(unittest.TestCase):
         finally:
             hermes_daemon.settings = original_settings
 
+    def test_tts_payload_uses_pronunciation_text_only_for_audio(self) -> None:
+        text = "Azele says Ascalon City is home, not Old Ascalon."
+
+        kokoro = hermes_daemon._kokoro_tts_payload(text)
+        chatterbox = hermes_daemon._chatterbox_tts_payload(text, expression="happy")
+
+        self.assertEqual(kokoro["input"], "Azelle says As-kah-lon City is home, not Old As-kah-lon.")
+        self.assertEqual(chatterbox["input"], "Azelle says As-kah-lon City is home, not Old As-kah-lon.")
+        self.assertEqual(text, "Azele says Ascalon City is home, not Old Ascalon.")
+
     def test_chatterbox_tts_payload_uses_distinct_mood_profiles(self) -> None:
         angry = hermes_daemon._chatterbox_tts_payload("Charr at the gate.", expression="angry")
         flirty = hermes_daemon._chatterbox_tts_payload("You noticed?", expression="flirty")

@@ -3158,10 +3158,23 @@ def reply_expression(text: str, urgency: str = "NORMAL") -> str:
     return "neutral"
 
 
+TTS_PRONUNCIATION_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bAzele\b", re.IGNORECASE), "Azelle"),
+    (re.compile(r"\bAscalon\b", re.IGNORECASE), "As-kah-lon"),
+)
+
+
+def tts_pronunciation_text(text: str) -> str:
+    spoken = text
+    for pattern, replacement in TTS_PRONUNCIATION_REPLACEMENTS:
+        spoken = pattern.sub(replacement, spoken)
+    return spoken
+
+
 def _kokoro_tts_payload(text: str) -> dict[str, Any]:
     return {
         "model": settings.kokoro_tts_model,
-        "input": text,
+        "input": tts_pronunciation_text(text),
         "voice": settings.kokoro_tts_voice,
         "response_format": settings.kokoro_tts_format,
     }
@@ -3196,7 +3209,7 @@ def generate_kokoro_audio(text: str) -> tuple[bytes, str] | None:
 def _chatterbox_tts_payload(text: str, *, expression: str) -> dict[str, Any]:
     profile = tts_expression_profile(expression)
     payload: dict[str, Any] = {
-        "input": text,
+        "input": tts_pronunciation_text(text),
         "voice_sample_path": settings.chatterbox_tts_voice_sample,
         "response_format": settings.chatterbox_tts_format,
         "expression": profile["expression"],
