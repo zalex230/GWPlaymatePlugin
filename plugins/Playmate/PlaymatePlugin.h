@@ -108,6 +108,7 @@ private:
             std::string audio_url;
             std::string audio_mime_type;
             std::string audio_expires_at;
+            bool suppress_tts = false;
             bool multi_message = false;
             uint32_t line_index = 0;
             uint32_t line_count = 0;
@@ -121,6 +122,7 @@ private:
         std::wstring message;
         std::string audio_url;
         std::string audio_mime_type;
+        bool suppress_tts = false;
         bool multi_message = false;
         uint32_t line_index = 0;
         uint32_t line_count = 0;
@@ -133,6 +135,7 @@ private:
         std::wstring message;
         std::string audio_url;
         std::string audio_mime_type;
+        bool suppress_tts = false;
         uint32_t post_play_delay_ms = 0;
     };
 

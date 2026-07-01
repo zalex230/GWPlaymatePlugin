@@ -1099,6 +1099,7 @@ void PlaymatePlugin::PollReplies()
                         Utf8ToWide(reply.message),
                         reply.audio_url,
                         reply.audio_mime_type,
+                        reply.suppress_tts,
                         reply.multi_message,
                         reply.line_index,
                         reply.line_count,
@@ -1439,25 +1440,27 @@ void PlaymatePlugin::FlushRepliesToChat()
         }
         const auto persona = CurrentPersonaNameWide();
         ShowCompanionSpeechBubble(reply.message);
-        QueuedTtsRequest tts_request{reply.message, reply.audio_url, reply.audio_mime_type};
-        if (reply.multi_message && reply.line_count > reply.line_index) {
-            tts_request.post_play_delay_ms = reply.post_play_delay_ms > 0
-                ? reply.post_play_delay_ms
-                : EstimateMultiMessageDelayMs(reply.message);
+        if (!reply.suppress_tts) {
+            QueuedTtsRequest tts_request{reply.message, reply.audio_url, reply.audio_mime_type, reply.suppress_tts};
+            if (reply.multi_message && reply.line_count > reply.line_index) {
+                tts_request.post_play_delay_ms = reply.post_play_delay_ms > 0
+                    ? reply.post_play_delay_ms
+                    : EstimateMultiMessageDelayMs(reply.message);
+            }
+            QueueCompanionTts(std::move(tts_request));
         }
-        QueueCompanionTts(std::move(tts_request));
         GW::Chat::WriteChat(GW::Chat::CHANNEL_GROUP, reply.message.c_str(), persona.c_str(), true);
         std::lock_guard lock(status_mutex_);
         ++received_count_;
         waiting_for_reply_ = false;
         last_reply_ms_ = MonotonicMs();
-        last_reply_status_ = "Reply received";
+        last_reply_status_ = reply.suppress_tts ? "Reply received; TTS suppressed" : "Reply received";
     }
 }
 
 void PlaymatePlugin::QueueCompanionTts(QueuedTtsRequest request)
 {
-    if (!tts_enabled_.load()) {
+    if (request.suppress_tts || !tts_enabled_.load()) {
         return;
     }
     request.message = TtsMessage(request.message);

@@ -1626,19 +1626,20 @@ def clean_model_reply(text: str) -> str:
 SPOKEN_EXPRESSION_LABEL_PATTERN = re.compile(
     r"^\s*(?P<expression>neutral|happy|teasing|flirty|confident|annoyed|angry|worried|sad|embarrassed|"
     r"anger|irritated|irritation|worry|fear|scared|afraid|playful|tease|flirt|romantic|shy|embarrass)"
-    r"\s*:\s*(?P<message>\S.*)$",
+    r"\s*(?::|-|,|;|\.|\u2014|\u2013)\s*(?P<message>\S.*)$",
     re.IGNORECASE,
 )
 
 
 def split_spoken_expression_label(text: str) -> tuple[str | None, str]:
     cleaned = re.sub(r"\s+", " ", text).strip()
-    match = SPOKEN_EXPRESSION_LABEL_PATTERN.match(cleaned)
-    if not match:
-        return None, cleaned
-    expression = normalize_expression(match.group("expression"))
-    message = match.group("message").strip()
-    return expression, message
+    expression: str | None = None
+    while True:
+        match = SPOKEN_EXPRESSION_LABEL_PATTERN.match(cleaned)
+        if not match:
+            return expression, cleaned
+        expression = normalize_expression(match.group("expression"))
+        cleaned = match.group("message").strip()
 
 
 def clamp_gw_chat_line(text: str) -> str:
@@ -3345,16 +3346,34 @@ def reply_has_audio(reply: CompanionReplyInsert) -> bool:
     return bool(reply.metadata.get("audio_url") or reply.metadata.get("audio_signed_url"))
 
 
+def can_publish_text_only_reply(reply: CompanionReplyInsert) -> bool:
+    return (
+        str(reply.metadata.get("trigger_event_type") or "").lower() == "player_chat"
+        and str(reply.metadata.get("trigger_channel") or "").lower() == "party"
+    )
+
+
 def insert_reply(reply: CompanionReplyInsert, *, consumed: bool = False) -> CompanionReplyInsert | None:
     if not _supabase_configured():
         return None
     reply = attach_tts_audio(reply)
     if tts_audio_required() and not reply_has_audio(reply):
-        print(
-            f"Hermes skipped companion reply without TTS audio: {reply.metadata.get('tts_error') or 'missing audio_url'}",
-            flush=True,
-        )
-        return None
+        if can_publish_text_only_reply(reply):
+            reply = reply.model_copy(
+                update={
+                    "metadata": {
+                        **reply.metadata,
+                        "suppress_tts": True,
+                        "delivery": "text_only_tts_unavailable",
+                    }
+                }
+            )
+        else:
+            print(
+                f"Hermes skipped companion reply without TTS audio: {reply.metadata.get('tts_error') or 'missing audio_url'}",
+                flush=True,
+            )
+            return None
     client = create_supabase_client(settings)
     row = reply.to_supabase_insert()
     if consumed:
@@ -3629,6 +3648,9 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
     if event.event_type == "environment_alert" and isinstance(record_id, int):
         for reply in replies:
             reply.metadata["trigger_environment_alert_id"] = record_id
+    for reply in replies:
+        reply.metadata["trigger_event_type"] = event.event_type
+        reply.metadata["trigger_channel"] = event.channel
 
     with world_state_lock:
         for reply in replies:

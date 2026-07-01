@@ -12,7 +12,14 @@ alter table if exists public.game_logs
     add column if not exists quest_count integer,
     add column if not exists active_quest_name text,
     add column if not exists active_quest_objectives text,
+    add column if not exists metadata jsonb not null default '{}'::jsonb,
     add column if not exists payload jsonb not null default '{}'::jsonb;
+
+update public.game_logs
+set metadata = coalesce(nullif(metadata, '{}'::jsonb), payload, '{}'::jsonb)
+where metadata = '{}'::jsonb
+  and payload is not null
+  and payload <> '{}'::jsonb;
 
 create extension if not exists vector;
 

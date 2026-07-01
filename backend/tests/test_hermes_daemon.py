@@ -175,6 +175,15 @@ class HermesDaemonTests(unittest.TestCase):
 
                 self.assertEqual(expression, expected_expression)
                 self.assertEqual(message, "I know. Still nice to hear.")
+        expression, message = split_spoken_expression_label("worried, Someone's down. Move, I can cover.")
+        self.assertEqual(expression, "worried")
+        self.assertEqual(message, "Someone's down. Move, I can cover.")
+        expression, message = split_spoken_expression_label("confident - I know. Still nice to hear.")
+        self.assertEqual(expression, "confident")
+        self.assertEqual(message, "I know. Still nice to hear.")
+        expression, message = split_spoken_expression_label("sad. I know. Give me a second.")
+        self.assertEqual(expression, "sad")
+        self.assertEqual(message, "I know. Give me a second.")
 
     def test_chatterbox_tts_payload_includes_expression_controls(self) -> None:
         original_settings = hermes_daemon.settings
@@ -302,6 +311,56 @@ class HermesDaemonTests(unittest.TestCase):
             )
 
             self.assertIsNone(inserted)
+        finally:
+            hermes_daemon.settings = original_settings
+            hermes_daemon.generate_tts_audio = original_generate
+            hermes_daemon.create_supabase_client = original_create_client
+
+    def test_insert_reply_publishes_player_chat_text_when_tts_unavailable(self) -> None:
+        original_settings = hermes_daemon.settings
+        original_generate = hermes_daemon.generate_tts_audio
+        original_create_client = hermes_daemon.create_supabase_client
+        inserted_rows: list[dict[str, object]] = []
+
+        class FakeTable:
+            def insert(self, row: dict[str, object]) -> "FakeTable":
+                inserted_rows.append(row)
+                return self
+
+            def execute(self) -> object:
+                return object()
+
+        class FakeClient:
+            def table(self, _name: str) -> FakeTable:
+                return FakeTable()
+
+        try:
+            hermes_daemon.settings = replace(
+                original_settings,
+                hermes_tts_provider="chatterbox-turbo",
+                supabase_url="https://example.supabase.co",
+                supabase_service_key="service-key",
+            )
+            hermes_daemon.generate_tts_audio = lambda text, expression: None
+            hermes_daemon.create_supabase_client = lambda settings: FakeClient()
+
+            inserted = hermes_daemon.insert_reply(
+                CompanionReplyInsert(
+                    persona="Azele",
+                    message="worried, I heard you. TTS is just being stubborn.",
+                    urgency="NORMAL",
+                    trigger_log_id=123,
+                    metadata={"trigger_event_type": "player_chat", "trigger_channel": "party"},
+                )
+            )
+
+            self.assertIsNotNone(inserted)
+            self.assertEqual(inserted_rows[0]["message"], "I heard you. TTS is just being stubborn.")
+            payload = inserted_rows[0]["payload"]
+            self.assertIsInstance(payload, dict)
+            self.assertTrue(payload["suppress_tts"])
+            self.assertEqual(payload["expression"], "worried")
+            self.assertNotIn("audio_url", payload)
         finally:
             hermes_daemon.settings = original_settings
             hermes_daemon.generate_tts_audio = original_generate

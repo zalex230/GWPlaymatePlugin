@@ -67,6 +67,7 @@ class ModelTests(unittest.TestCase):
                 "line_count": 2,
                 "reply_delay_ms": 5400,
                 "post_play_delay_ms": 6200,
+                "suppress_tts": True,
             },
         )
 
@@ -80,6 +81,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(item.line_count, 2)
         self.assertEqual(item.reply_delay_ms, 5400)
         self.assertEqual(item.post_play_delay_ms, 6200)
+        self.assertTrue(item.suppress_tts)
 
     def test_reply_row_uses_empty_audio_fields_for_text_only_reply(self) -> None:
         row = CompanionReplyRow(
@@ -95,6 +97,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(item.audio_url, "")
         self.assertEqual(item.audio_mime_type, "")
         self.assertEqual(item.audio_expires_at, "")
+        self.assertFalse(item.suppress_tts)
 
     def test_environment_alert_insert_maps_radar_fields(self) -> None:
         event = TelemetryEvent(
