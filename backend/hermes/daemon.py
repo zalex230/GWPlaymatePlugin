@@ -56,6 +56,8 @@ AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 120.0
 AMBIENT_HEARTBEAT_POLL_SECONDS = 10.0
 AMBIENT_HEARTBEAT_ACTIVITY_SECONDS = 600.0
 UNCONSUMED_REPLY_STALE_SECONDS = 20.0
+PLAYER_CHAT_PENDING_REPLY_FLUSH_SECONDS = 45.0
+MAP_ENTRY_AFTER_PLAYER_CHAT_QUIET_SECONDS = 35.0
 PERSONA_MEMORY_DIR = Path(__file__).with_name("personas")
 GW_WIKI_API_URL = "https://wiki.guildwars.com/api.php"
 GW_WIKI_PAGE_URL = "https://wiki.guildwars.com/wiki/{title}"
@@ -3830,6 +3832,46 @@ def expire_stale_unconsumed_replies(*, stale_seconds: float = UNCONSUMED_REPLY_S
     return len(expired_ids)
 
 
+def expire_pending_replies_before_player_chat(
+    persona: str,
+    session_id: str,
+    *,
+    max_age_seconds: float = PLAYER_CHAT_PENDING_REPLY_FLUSH_SECONDS,
+) -> int:
+    if not _supabase_configured():
+        return 0
+    client = create_supabase_client(settings)
+    response = (
+        client.table(COMPANION_REPLIES_TABLE)
+        .select("id,created_at,payload")
+        .eq("persona", persona)
+        .is_("consumed_at", "null")
+        .order("created_at", desc=False)
+        .limit(100)
+        .execute()
+    )
+    now = datetime.now(timezone.utc)
+    expired_ids: list[int] = []
+    for row in response.data or []:
+        row_id = row.get("id")
+        if not isinstance(row_id, int):
+            continue
+        payload = row.get("payload") or {}
+        row_session_id = str(payload.get("session_id") or "").strip()
+        if session_id and row_session_id and row_session_id != session_id:
+            continue
+        created_at = _parse_created_at(row.get("created_at"))
+        if not created_at:
+            continue
+        age = (now - created_at).total_seconds()
+        if -5.0 <= age <= max_age_seconds:
+            expired_ids.append(row_id)
+    if not expired_ids:
+        return 0
+    client.table(COMPANION_REPLIES_TABLE).update({"consumed_at": utc_now_iso()}).in_("id", expired_ids).execute()
+    return len(expired_ids)
+
+
 def has_unconsumed_ambient_reply(persona: str, session_id: str) -> bool:
     if not _supabase_configured():
         return False
@@ -3959,7 +4001,11 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
                 "map-entry",
             )
             has_map_name = bool(map_display_name(event))
-            if last_map_comment_by_session.get(map_comment_key) == event.map_id:
+            recent_player_chat = (
+                world_state.last_player_chat_at > 0
+                and time.time() - world_state.last_player_chat_at < MAP_ENTRY_AFTER_PLAYER_CHAT_QUIET_SECONDS
+            )
+            if recent_player_chat or last_map_comment_by_session.get(map_comment_key) == event.map_id:
                 should_speak_now = False
             else:
                 should_speak_now = has_map_name and world_state.can_speak(20.0)
@@ -3993,6 +4039,10 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
         record_memory_event(event, record_id=record_id)
     if not should_speak_now:
         return []
+    if is_direct_player_chat:
+        expired = expire_pending_replies_before_player_chat(persona, session_id)
+        if expired:
+            print(f"Hermes expired {expired} pending replies before player chat.", flush=True)
     if use_ollama and should_use_fast_fallback_before_ollama(event):
         decision = fallback_rule_decision(event)
     elif use_ollama and should_use_ollama_for_event(event):

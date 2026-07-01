@@ -24,6 +24,7 @@ from backend.hermes_daemon.daemon import (
     build_character_reply_prompt,
     event_from_environment_alert,
     event_from_game_log,
+    expire_pending_replies_before_player_chat,
     extract_json_object,
     fallback_rule_decision,
     generate_tts_audio,
@@ -2639,6 +2640,93 @@ class HermesDaemonTests(unittest.TestCase):
         finally:
             hermes_daemon.settings = original_settings
             hermes_daemon.create_supabase_client = original_create_client
+
+    def test_pending_replies_are_flushed_before_player_chat(self) -> None:
+        original_settings = hermes_daemon.settings
+        original_create_client = hermes_daemon.create_supabase_client
+        updated_ids: list[int] = []
+
+        class FakeQuery:
+            def __init__(self) -> None:
+                self.is_update = False
+
+            def select(self, *_args: object) -> "FakeQuery":
+                return self
+
+            def eq(self, *_args: object) -> "FakeQuery":
+                return self
+
+            def is_(self, *_args: object) -> "FakeQuery":
+                return self
+
+            def order(self, *_args: object, **_kwargs: object) -> "FakeQuery":
+                return self
+
+            def limit(self, *_args: object) -> "FakeQuery":
+                return self
+
+            def update(self, *_args: object) -> "FakeQuery":
+                self.is_update = True
+                return self
+
+            def in_(self, _column: str, values: list[int]) -> "FakeQuery":
+                updated_ids.extend(values)
+                return self
+
+            def execute(self) -> object:
+                class Response:
+                    data = [
+                        {
+                            "id": 41,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "payload": {"session_id": "session-1", "trigger_event_type": "map_loaded"},
+                        }
+                    ]
+
+                return Response()
+
+        class FakeClient:
+            def table(self, _table_name: str) -> FakeQuery:
+                return FakeQuery()
+
+        try:
+            hermes_daemon.settings = replace(
+                original_settings,
+                supabase_url="https://example.supabase.co",
+                supabase_service_key="service-key",
+            )
+            hermes_daemon.create_supabase_client = lambda settings: FakeClient()
+
+            expired = expire_pending_replies_before_player_chat("Azele", "session-1")
+
+            self.assertEqual(expired, 1)
+            self.assertEqual(updated_ids, [41])
+        finally:
+            hermes_daemon.settings = original_settings
+            hermes_daemon.create_supabase_client = original_create_client
+
+    def test_map_entry_silent_after_recent_player_chat(self) -> None:
+        world_state.last_player_chat_at = time.time()
+
+        replies = process_event(
+            event_from_game_log(
+                {
+                    "sender": "System",
+                    "channel": "system",
+                    "message": "map_loaded",
+                    "metadata": {
+                        "event_type": "map_loaded",
+                        "persona": "Azele",
+                        "session_id": "recent-chat-map",
+                        "map_id": 147,
+                        "map_name": "The Northlands",
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+
+        self.assertEqual(replies, [])
 
     def test_ambient_heartbeat_uses_ollama_generation_when_enabled(self) -> None:
         now = time.time()
