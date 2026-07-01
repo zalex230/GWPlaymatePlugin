@@ -2040,7 +2040,7 @@ class HermesDaemonTests(unittest.TestCase):
         try:
             hermes_daemon.settings = replace(
                 original_settings,
-                hermes_player_chat_ollama_timeout_seconds=3.5,
+                hermes_player_chat_ollama_timeout_seconds=8.0,
             )
             hermes_daemon.ollama_generate_visible = fake_generate
 
@@ -2059,7 +2059,7 @@ class HermesDaemonTests(unittest.TestCase):
             hermes_daemon.ollama_generate_visible = original_generate
 
         self.assertEqual(decision.response, "I know. Still nice to hear.")
-        self.assertEqual(observed, [3.5])
+        self.assertEqual(observed, [8.0])
 
     def test_player_chat_ollama_timeout_falls_back_quickly(self) -> None:
         original = hermes_daemon.decide_with_ollama
