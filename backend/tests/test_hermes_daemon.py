@@ -43,6 +43,7 @@ from backend.hermes_daemon.daemon import (
     recent_conversation_context,
     recent_companion_context,
     recent_reply_texts,
+    repair_model_reply,
     reply_expression,
     sanitize_memory_for_prompt,
     should_flush_memory_buffer,
@@ -578,6 +579,29 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(reply.should_speak)
         self.assertRegex(reply.response.lower(), r"ranik|stand|inspected|parade|drilled")
         self.assertNotIn("what are we doing", reply.response.lower())
+
+    def test_fallback_checkin_prioritizes_current_player_message(self) -> None:
+        recent_reply_texts.append("Ranik has that soldier-stiff feeling again. Do you think they practice that?")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hey. im feeling good. how are you?",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 166,
+                    "map_name": "Fort Ranik",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"\b(?:good|alright|steady|better)\b")
+        self.assertNotIn("soldiers", reply.response.lower())
+        self.assertNotIn("posture", reply.response.lower())
 
     def test_fallback_prioritizes_krytan_leggings_upgrade_over_greeting(self) -> None:
         event = event_from_game_log(
@@ -1339,6 +1363,24 @@ class HermesDaemonTests(unittest.TestCase):
             )
         )
         self.assertFalse(model_reply_has_bad_shape("I know. Still nice to hear."))
+
+    def test_model_reply_repairs_minor_checkin_grammar_before_validation(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hey. im feeling good. how are you?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        repaired = repair_model_reply(
+            "Hey myself too. Feeling pretty good actually since you're up and about. What've got your spirits high today, exactly?"
+        )
+
+        self.assertIn("Me too", repaired)
+        self.assertIn("What's got", repaired)
+        self.assertEqual(validate_model_reply(repaired, event), repaired)
 
     def test_devona_pet_plan_avoids_generic_fallback(self) -> None:
         event = event_from_game_log(

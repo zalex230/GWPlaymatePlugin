@@ -160,7 +160,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
 )
 FILLER_OPENER_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]+", re.IGNORECASE)
 DANGLING_REPLY_ENDING_PATTERN = re.compile(
-    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|exactly|just|what|who|where|why|how)$",
+    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|what|who|where|why|how)$",
     re.IGNORECASE,
 )
 MEMORY_MEANINGFUL_EVENT_TYPES = {
@@ -2202,6 +2202,52 @@ def is_simple_greeting(message: str) -> bool:
     return bool(re.fullmatch(r"\s*(?:hello|helo|hi|hey|yo|there)[.!?,\s]*", message))
 
 
+def is_player_checkin(message: str) -> bool:
+    lowered = re.sub(r"\s+", " ", readable_game_text(message).lower()).strip()
+    return bool(
+        re.search(r"\bhow\s+(?:are|r)\s+(?:you|u)\b", lowered)
+        or re.search(r"\b(?:i'?m|im|i am)\s+feeling\b", lowered)
+        or re.search(r"\b(?:you good|you ok|you okay|are you ok|are you okay|u ok)\b", lowered)
+    )
+
+
+def azele_player_checkin_reply(message: str) -> str:
+    lowered = readable_game_text(message).lower()
+    player_feels_good = bool(re.search(r"\b(?:feeling|feel)\s+(?:good|great|better|fine|okay|ok)\b", lowered))
+    asks_azele = bool(re.search(r"\bhow\s+(?:are|r)\s+(?:you|u)\b", lowered))
+    if player_feels_good and asks_azele:
+        return first_fresh_reply(
+            [
+                "Good. I like hearing that. I’m alright too, better now that you sound steady.",
+                "I’m good. Better because you sound like yourself again.",
+                "Good, then I’m good too. I was starting to wonder if Ranik knocked the mood out of us.",
+            ]
+        )
+    if asks_azele:
+        return first_fresh_reply(
+            [
+                "I’m alright. A little wound up, but still with you.",
+                "I’m good enough. Tell me where your head is at.",
+                "Still here. Still sharp. How are you doing?",
+            ]
+        )
+    if player_feels_good:
+        return first_fresh_reply(
+            [
+                "Good. I like hearing you sound steady.",
+                "Good. Keep that energy, I can work with it.",
+                "That’s good to hear. Makes the road feel lighter.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "I’m here. Tell me how you’re feeling for real.",
+            "I’m listening. What’s going on with you?",
+            "Still with you. Talk to me.",
+        ]
+    )
+
+
 def is_skirt_outfit_question(message: str) -> bool:
     return bool(
         re.search(r"\b(skirts?|mini\s*skirts?|long(?:er)?\s+skirts?|short(?:er)?\s+skirts?|leggings?)\b", message)
@@ -2542,6 +2588,7 @@ def ollama_generate_visible(prompt: str) -> str:
 
 
 def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
+    reply = repair_model_reply(reply)
     if "!" not in (event.message or ""):
         reply = reply.replace("!", ".")
     if re.search(r"\b(kid|tasty|elemental fun|dance in flames)\b", reply, re.IGNORECASE):
@@ -2575,6 +2622,14 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
     if not reply:
         raise ValueError("empty model reply")
     return reply
+
+
+def repair_model_reply(reply: str) -> str:
+    cleaned = re.sub(r"\s+", " ", reply or "").strip()
+    cleaned = re.sub(r"\bWhat['’]?ve\s+got\b", "What's got", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bwhat['’]?ve\s+got\b", "what's got", cleaned)
+    cleaned = re.sub(r"\bHey myself too[,.]?\s*", "Hey. Me too. ", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
 
 
 def character_reply_with_ollama(event: TelemetryEvent) -> HermesDecision:
@@ -2749,6 +2804,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return charr_reply
     message = (event.message or "").lower()
     quest = readable_game_text(event.active_quest_name)
+    if is_player_checkin(message):
+        return azele_player_checkin_reply(message)
     if clarification := azele_clarification_reply(message):
         return clarification
     if contextual_followup := azele_contextual_followup_reply(message):
