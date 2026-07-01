@@ -2893,6 +2893,40 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("42%", decision.response)
         self.assertTrue(any(word in decision.response.lower() for word in ["hit", "pain", "cover", "help"]))
 
+    def test_fallback_rule_replies_to_status_effect(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_environment_alert(
+                {
+                    "alert_type": "status_effect",
+                    "severity": "HIGH",
+                    "message": "Azele is dazed.",
+                    "payload": {"effect_type": "condition", "effect_name": "dazed"},
+                }
+            )
+        )
+
+        self.assertTrue(decision.should_speak)
+        self.assertEqual(decision.urgency, "HIGH")
+        self.assertIn("dazed", decision.response.lower())
+        self.assertLessEqual(len(decision.response), 119)
+
+    def test_fallback_rule_replies_to_combat_over(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_environment_alert(
+                {
+                    "alert_type": "combat_over",
+                    "severity": "LOW",
+                    "message": "Combat ended.",
+                    "payload": {"hostile_count": 0, "close_hostile_count": 0, "dead_hostile_count": 3},
+                }
+            )
+        )
+
+        self.assertTrue(decision.should_speak)
+        self.assertEqual(decision.urgency, "NORMAL")
+        self.assertTrue(any(word in decision.response.lower() for word in ["down", "handled", "breathing"]))
+        self.assertLessEqual(len(decision.response), 119)
+
     def test_environment_alert_preserves_damage_metadata(self) -> None:
         event = event_from_environment_alert(
             {

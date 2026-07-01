@@ -32,6 +32,9 @@ class TelemetryEvent(BaseModel):
     player_hp_drop: float = 0.0
     hp_threshold_crossed: str = ""
     damage_severity: str = ""
+    effect_type: str = ""
+    effect_name: str = ""
+    effect_source: str = ""
     hostile_count: int = 0
     close_hostile_count: int = 0
     dead_hostile_count: int = 0
@@ -91,6 +94,9 @@ class TelemetryEvent(BaseModel):
             "player_hp_drop": self.player_hp_drop,
             "hp_threshold_crossed": self.hp_threshold_crossed,
             "damage_severity": self.damage_severity,
+            "effect_type": self.effect_type,
+            "effect_name": self.effect_name,
+            "effect_source": self.effect_source,
             "hostile_count": self.hostile_count,
             "close_hostile_count": self.close_hostile_count,
             "dead_hostile_count": self.dead_hostile_count,

@@ -17,6 +17,7 @@ APPROVED_ENVIRONMENT_ALERT_TYPES = {
     "combat_started",
     "danger_spike",
     "enemy_patrol_nearby",
+    "status_effect",
     "under_attack",
 }
 GAMEPLAY_EVENT_TYPES = {

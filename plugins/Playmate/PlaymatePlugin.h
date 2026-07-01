@@ -88,6 +88,9 @@ private:
         float player_hp_drop = 0.0f;
         std::string hp_threshold_crossed;
         std::string damage_severity;
+        std::string effect_type;
+        std::string effect_name;
+        std::string effect_source;
         uint32_t hostile_count = 0;
         uint32_t close_hostile_count = 0;
         uint32_t dead_hostile_count = 0;
@@ -152,6 +155,9 @@ private:
         float player_hp_drop = 0.0f;
         std::string hp_threshold_crossed;
         std::string damage_severity;
+        std::string effect_type;
+        std::string effect_name;
+        std::string effect_source;
         uint32_t hostile_count = 0;
         uint32_t close_hostile_count = 0;
         uint32_t dead_hostile_count = 0;

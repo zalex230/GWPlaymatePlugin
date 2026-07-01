@@ -52,11 +52,11 @@ MAX_GW_REPLY_LINES = 3
 MULTI_MESSAGE_MIN_REPLY_DELAY_MS = 3200
 MULTI_MESSAGE_MAX_REPLY_DELAY_MS = 9000
 VISIBLE_ENEMY_RANGE = 900.0
-AMBIENT_QUIP_MIN_SECONDS = 85.0
-AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 120.0
+AMBIENT_QUIP_MIN_SECONDS = 55.0
+AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 55.0
 AMBIENT_HEARTBEAT_POLL_SECONDS = 10.0
 AMBIENT_HEARTBEAT_ACTIVITY_SECONDS = 600.0
-UNCONSUMED_REPLY_STALE_SECONDS = 20.0
+UNCONSUMED_REPLY_STALE_SECONDS = 60.0
 PLAYER_CHAT_PENDING_REPLY_FLUSH_SECONDS = 45.0
 MAP_ENTRY_AFTER_PLAYER_CHAT_QUIET_SECONDS = 35.0
 PERSONA_MEMORY_DIR = Path(__file__).with_name("personas")
@@ -82,8 +82,15 @@ PROACTIVE_EVENT_TYPES = {
     "map_loaded",
     "snapshot",
 }
-SPEAKING_ENVIRONMENT_ALERT_TYPES = {"under_attack", "danger_spike", "party_member_down", "combat_started"}
-EMERGENCY_ALERT_TYPES = {"under_attack", "party_member_down", "combat_started"}
+SPEAKING_ENVIRONMENT_ALERT_TYPES = {
+    "under_attack",
+    "danger_spike",
+    "party_member_down",
+    "combat_started",
+    "combat_over",
+    "status_effect",
+}
+EMERGENCY_ALERT_TYPES = {"under_attack", "party_member_down", "combat_started", "status_effect"}
 NOTABLE_CHAT_PATTERNS = re.compile(
     r"\b("
     r"gold|green|unique|rare|drop|dropped|item|chest|boss|elite|skill|quest|completed|morale|death|died|resurrect|shrine|"
@@ -279,6 +286,9 @@ def event_from_game_log(record: dict[str, Any]) -> TelemetryEvent:
         player_hp_drop=metadata.get("player_hp_drop", 0),
         hp_threshold_crossed=metadata.get("hp_threshold_crossed", ""),
         damage_severity=metadata.get("damage_severity", ""),
+        effect_type=metadata.get("effect_type", record.get("effect_type") or ""),
+        effect_name=metadata.get("effect_name", record.get("effect_name") or ""),
+        effect_source=metadata.get("effect_source", record.get("effect_source") or ""),
         hostile_count=metadata.get("hostile_count", 0),
         close_hostile_count=metadata.get("close_hostile_count", 0),
         dead_hostile_count=metadata.get("dead_hostile_count", 0),
@@ -324,6 +334,9 @@ def event_from_environment_alert(record: dict[str, Any]) -> TelemetryEvent:
         player_hp_drop=metadata.get("player_hp_drop", 0),
         hp_threshold_crossed=metadata.get("hp_threshold_crossed", ""),
         damage_severity=metadata.get("damage_severity", ""),
+        effect_type=metadata.get("effect_type", record.get("effect_type") or ""),
+        effect_name=metadata.get("effect_name", record.get("effect_name") or ""),
+        effect_source=metadata.get("effect_source", record.get("effect_source") or ""),
         hostile_count=metadata.get("hostile_count", 0),
         close_hostile_count=metadata.get("close_hostile_count", 0),
         dead_hostile_count=metadata.get("dead_hostile_count", 0),
@@ -1845,6 +1858,10 @@ def should_speak_for_environment_alert(event: TelemetryEvent) -> bool:
         return False
     if event.alert_type == "under_attack":
         return event.player_hp > 0 or getattr(event, "player_hp_drop", 0) > 0
+    if event.alert_type == "status_effect":
+        return bool(readable_game_text(getattr(event, "effect_name", "")) or readable_game_text(getattr(event, "effect_type", "")))
+    if event.alert_type == "combat_over":
+        return event.hostile_count <= 0 and event.close_hostile_count <= 0
     if event.alert_type == "combat_started":
         return bool((event.agent_id or readable_game_text(event.agent_name)) and has_visible_enemy_context(event))
     if event.alert_type == "danger_spike":
@@ -1859,7 +1876,7 @@ def should_ignore_radar_alert(event: TelemetryEvent) -> bool:
         return False
     if not should_speak_for_environment_alert(event):
         return True
-    if event.alert_type in EMERGENCY_ALERT_TYPES:
+    if event.alert_type in EMERGENCY_ALERT_TYPES or event.alert_type in {"combat_over"}:
         return False
     if event.hostile_count <= 0 and event.close_hostile_count <= 0:
         return True
@@ -2919,6 +2936,103 @@ def azele_under_attack_reply(event: TelemetryEvent) -> str:
     )
 
 
+def azele_status_effect_reply(event: TelemetryEvent) -> str:
+    effect_type = readable_game_text(getattr(event, "effect_type", "")).lower()
+    effect_name = readable_game_text(getattr(event, "effect_name", "")).lower()
+    label = effect_name or effect_type
+
+    if "bleed" in label:
+        return first_fresh_reply(
+            [
+                "I’m bleeding. Keep them off me a second.",
+                "Bleeding. Great. Don’t let them pile on me.",
+                "I’m bleeding, but I can still move. Stay close.",
+            ]
+        )
+    if "daze" in label:
+        return first_fresh_reply(
+            [
+                "Dazed. Ugh, my head. Cover me.",
+                "I’m dazed. Give me a breath.",
+                "That dazed me. Keep pressure while I shake it off.",
+            ]
+        )
+    if "blind" in label:
+        return first_fresh_reply(
+            [
+                "Blinded. That is extremely annoying.",
+                "I’m blinded. Call targets clearly.",
+                "Blind on me. I’ll manage, but stay sharp.",
+            ]
+        )
+    if "poison" in label:
+        return first_fresh_reply(
+            [
+                "Poisoned. Lovely. Let’s end this quickly.",
+                "I’m poisoned. Keep moving.",
+                "Poison on me. I don’t love that.",
+            ]
+        )
+    if "burn" in label:
+        return first_fresh_reply(
+            [
+                "Burning. Ow. Very funny, universe.",
+                "I’m burning. Finish them before I start smoking.",
+                "Burning on me. Keep them busy.",
+            ]
+        )
+    if "weak" in label or "cracked" in label:
+        return first_fresh_reply(
+            [
+                "Weakness on me. I can still fight.",
+                "I’m weakened. Don’t give them space.",
+                "Weakness. Fine. We hit cleaner.",
+            ]
+        )
+    if "hex" in label:
+        return first_fresh_reply(
+            [
+                "I’m hexed. I hate that feeling.",
+                "Hex on me. Watch for the follow-up.",
+                "I’m hexed. Keep them off me while I work through it.",
+            ]
+        )
+    if "condition" in label:
+        return first_fresh_reply(
+            [
+                "Condition on me. Keep an eye out.",
+                "I caught a condition. Still up.",
+                "Something’s on me. Don’t let them press it.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "Something’s on me. Keep an eye out.",
+            "I caught something nasty. Still fighting.",
+            "That effect landed. Stay close.",
+        ]
+    )
+
+
+def azele_combat_over_reply(event: TelemetryEvent) -> str:
+    dead_count = int(getattr(event, "dead_hostile_count", 0) or 0)
+    if dead_count >= 2:
+        return first_fresh_reply(
+            [
+                f"That’s {dead_count} down. You still in one piece?",
+                f"Group’s down. {dead_count} of them. Need a second?",
+                f"That’s the group handled. {dead_count} down, and I’m still breathing.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "That’s them down. You still in one piece?",
+            "Clean enough. Need a second before we move?",
+            "Fight’s over. I’m still here, so I’m calling that a win.",
+        ]
+    )
+
+
 def ollama_generate_visible(prompt: str, *, timeout_seconds: float | None = None) -> str:
     url = settings.ollama_host.rstrip("/") + "/api/generate"
     payload = {
@@ -3151,6 +3265,22 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
                 should_speak=True,
                 channel_override="CHANNEL_PARTY",
                 urgency="HIGH",
+                response=clamp_gw_chat_line(response),
+            )
+        if event.alert_type == "status_effect":
+            response = azele_status_effect_reply(event)
+            return HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="HIGH",
+                response=clamp_gw_chat_line(response),
+            )
+        if event.alert_type == "combat_over":
+            response = azele_combat_over_reply(event)
+            return HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="NORMAL",
                 response=clamp_gw_chat_line(response),
             )
         if event.alert_type == "party_member_down":
@@ -3946,22 +4076,31 @@ def expire_pending_replies_before_player_chat(
     return len(expired_ids)
 
 
-def has_unconsumed_ambient_reply(persona: str, session_id: str) -> bool:
+def has_unconsumed_ambient_reply(
+    persona: str,
+    session_id: str,
+    *,
+    max_age_seconds: float = UNCONSUMED_REPLY_STALE_SECONDS,
+) -> bool:
     if not _supabase_configured():
         return False
     client = create_supabase_client(settings)
     response = (
         client.table(COMPANION_REPLIES_TABLE)
-        .select("id,payload")
+        .select("id,created_at,payload")
         .eq("persona", persona)
         .is_("consumed_at", "null")
         .order("created_at", desc=True)
         .limit(25)
         .execute()
     )
+    now = datetime.now(timezone.utc)
     for row in response.data or []:
         payload = row.get("payload") or {}
         if payload.get("trigger") == "ambient_heartbeat" and payload.get("session_id") == session_id:
+            created_at = _parse_created_at(row.get("created_at"))
+            if created_at and (now - created_at).total_seconds() > max_age_seconds:
+                continue
             return True
     return False
 
@@ -4092,7 +4231,13 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
                 return []
         else:
             map_comment_key = None
-        if is_emergency_alert or is_emergency_gameplay:
+        if event.event_type == "environment_alert" and event.alert_type == "under_attack":
+            required_cooldown = 3.0
+        elif event.event_type == "environment_alert" and event.alert_type == "status_effect":
+            required_cooldown = 5.0
+        elif event.event_type == "environment_alert" and event.alert_type == "combat_over":
+            required_cooldown = 7.0
+        elif is_emergency_alert or is_emergency_gameplay:
             required_cooldown = 5.0
         elif event.event_type == "target_changed":
             required_cooldown = 6.0

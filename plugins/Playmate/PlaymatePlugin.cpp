@@ -96,6 +96,32 @@ namespace {
         }
     }
 
+    std::string StatusEffectNameFromBitmap(const uint32_t effects)
+    {
+        if (effects & (1u << static_cast<uint32_t>(GW::Constants::EffectID::bleeding))) {
+            return "bleeding";
+        }
+        if (effects & (1u << static_cast<uint32_t>(GW::Constants::EffectID::blind))) {
+            return "blind";
+        }
+        if (effects & (1u << static_cast<uint32_t>(GW::Constants::EffectID::burning))) {
+            return "burning";
+        }
+        if (effects & (1u << static_cast<uint32_t>(GW::Constants::EffectID::disease))) {
+            return "disease";
+        }
+        if (effects & (1u << static_cast<uint32_t>(GW::Constants::EffectID::poison))) {
+            return "poison";
+        }
+        if (effects & (1u << static_cast<uint32_t>(GW::Constants::EffectID::dazed))) {
+            return "dazed";
+        }
+        if (effects & (1u << static_cast<uint32_t>(GW::Constants::EffectID::weakness))) {
+            return "weakness";
+        }
+        return {};
+    }
+
     std::string TrimTrailingSlash(std::string value)
     {
         while (!value.empty() && value.back() == '/') {
@@ -1228,6 +1254,9 @@ void PlaymatePlugin::QueueEnvironmentAlert(std::string alert_type, std::string s
     event.player_hp_drop = scan.player_hp_drop;
     event.hp_threshold_crossed = scan.hp_threshold_crossed;
     event.damage_severity = scan.damage_severity;
+    event.effect_type = scan.effect_type;
+    event.effect_name = scan.effect_name;
+    event.effect_source = scan.effect_source;
     event.hostile_count = scan.hostile_count;
     event.close_hostile_count = scan.close_hostile_count;
     event.dead_hostile_count = scan.dead_hostile_count;
@@ -1970,14 +1999,42 @@ void PlaymatePlugin::OnAgentState(GW::HookStatus*, GW::Packet::StoC::AgentState*
         return;
     }
 
+    constexpr uint32_t condition_state_bit = 0x2;
     constexpr uint32_t dead_state_bit = 0x10;
+    constexpr uint32_t hex_state_bit = 0x800;
     const bool is_dead = (packet->state & dead_state_bit) != 0;
     bool was_dead = false;
+    bool gained_condition = false;
+    bool gained_hex = false;
     {
         std::lock_guard lock(active_plugin->gameplay_state_mutex_);
         const auto previous = active_plugin->last_agent_states_.find(packet->agent_id);
-        was_dead = previous != active_plugin->last_agent_states_.end() && (previous->second & dead_state_bit) != 0;
+        const uint32_t previous_state = previous != active_plugin->last_agent_states_.end() ? previous->second : 0;
+        was_dead = (previous_state & dead_state_bit) != 0;
+        gained_condition = (packet->state & condition_state_bit) != 0 && (previous_state & condition_state_bit) == 0;
+        gained_hex = (packet->state & hex_state_bit) != 0 && (previous_state & hex_state_bit) == 0;
         active_plugin->last_agent_states_[packet->agent_id] = packet->state;
+    }
+
+    if (!is_dead && (gained_condition || gained_hex)) {
+        std::string effect_name;
+        if (const GW::Agent* agent = GW::Agents::GetAgentByID(packet->agent_id)) {
+            if (const GW::AgentLiving* living = agent->GetAsAgentLiving()) {
+                effect_name = StatusEffectNameFromBitmap(living->effects);
+            }
+        }
+
+        TelemetryEvent event;
+        event.event_type = "environment_alert";
+        event.message = gained_hex ? "Party member is hexed." : "Party member has a condition.";
+        event.agent_id = packet->agent_id;
+        event.agent_name = PartyAgentName(packet->agent_id);
+        event.alert_type = "status_effect";
+        event.severity = "HIGH";
+        event.effect_type = gained_hex ? "hex" : "condition";
+        event.effect_name = effect_name.empty() ? event.effect_type : effect_name;
+        event.effect_source = "agent_state";
+        active_plugin->QueueGameplayEvent(std::move(event));
     }
 
     if (is_dead == was_dead) {

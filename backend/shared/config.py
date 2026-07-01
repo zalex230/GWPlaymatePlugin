@@ -41,7 +41,7 @@ class BackendSettings:
     port: int = _int_env("PLAYMATE_PORT", 8787)
     active_session: str = os.getenv("PLAYMATE_ACTIVE_SESSION", "local-playtest")
     reply_limit: int = _int_env("PLAYMATE_REPLY_LIMIT", 8)
-    reply_max_age_seconds: float = _float_env("PLAYMATE_REPLY_MAX_AGE_SECONDS", 20.0)
+    reply_max_age_seconds: float = _float_env("PLAYMATE_REPLY_MAX_AGE_SECONDS", 60.0)
     snapshot_min_interval_seconds: float = _float_env("PLAYMATE_SNAPSHOT_MIN_INTERVAL_SECONDS", 30.0)
     hermes_direct_url: str = os.getenv("HERMES_DIRECT_URL", "")
     hermes_direct_timeout_seconds: float = _float_env("HERMES_DIRECT_TIMEOUT_SECONDS", 90.0)

@@ -193,6 +193,29 @@ class WindowsBridgeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"accepted": True})
 
+    def test_post_event_routes_status_effect_alert(self) -> None:
+        client = TestClient(app)
+        payload = {
+            "source": "gwtoolboxpp-playmate",
+            "persona": "A Test",
+            "client_time": "2026-06-26T12:00:00Z",
+            "event_type": "environment_alert",
+            "sender": "System",
+            "channel": "system",
+            "message": "Azele is dazed.",
+            "alert_type": "status_effect",
+            "severity": "HIGH",
+            "map_id": 148,
+            "effect_type": "condition",
+            "effect_name": "dazed",
+        }
+
+        with patch("backend.windows_bridge.app._client", return_value=_FakeSupabase()):
+            response = client.post("/v1/playmate/events", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"accepted": True})
+
     def test_post_event_does_not_snapshot_throttle_under_attack_alerts(self) -> None:
         client = TestClient(app)
         fake = _CountingSupabase()
