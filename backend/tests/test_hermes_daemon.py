@@ -5,6 +5,8 @@ from collections import deque
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import os
+from pathlib import Path
+import tempfile
 import time
 import unittest
 
@@ -75,6 +77,18 @@ class HermesDaemonTests(unittest.TestCase):
         hermes_daemon.insert_memory = self._original_insert_memory
         memory_buffers.clear()
         memory_last_write_at.clear()
+
+    def test_poll_watermarks_round_trip_to_configured_file(self) -> None:
+        original_settings = hermes_daemon.settings
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "poll.json"
+            hermes_daemon.settings = replace(original_settings, hermes_poll_state_path=str(state_path))
+            try:
+                hermes_daemon.save_poll_watermarks({"game_logs": 12, "environment_alerts": 34})
+
+                self.assertEqual(hermes_daemon.load_poll_watermarks(), {"game_logs": 12, "environment_alerts": 34})
+            finally:
+                hermes_daemon.settings = original_settings
 
     def test_event_from_game_log_uses_metadata(self) -> None:
         event = event_from_game_log(

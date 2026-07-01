@@ -60,6 +60,7 @@ GW_WIKI_API_URL = "https://wiki.guildwars.com/api.php"
 GW_WIKI_PAGE_URL = "https://wiki.guildwars.com/wiki/{title}"
 GW_WIKI_TIMEOUT_SECONDS = 4.0
 GW_WIKI_CACHE_SECONDS = 3600.0
+DEFAULT_POLL_STATE_PATH = Path(__file__).resolve().parents[1] / ".state" / "hermes_poll_watermarks.json"
 PROACTIVE_EVENT_TYPES = {
     "active_quest_changed",
     "environment_alert",
@@ -3582,56 +3583,86 @@ async def subscribe_to_game_logs() -> None:
     await channel.subscribe()
 
 
-async def poll_unprocessed_game_logs() -> None:
+def poll_state_path() -> Path:
+    if settings.hermes_poll_state_path:
+        return Path(settings.hermes_poll_state_path).expanduser()
+    return DEFAULT_POLL_STATE_PATH
+
+
+def load_poll_watermarks() -> dict[str, int]:
+    path = poll_state_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"game_logs": 0, "environment_alerts": 0}
+    return {
+        "game_logs": int(payload.get("game_logs") or 0),
+        "environment_alerts": int(payload.get("environment_alerts") or 0),
+    }
+
+
+def save_poll_watermarks(watermarks: dict[str, int]) -> None:
+    path = poll_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(watermarks, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def fetch_records_after_id(client: Any, table_name: str, last_id: int) -> list[dict[str, Any]]:
+    response = (
+        client.table(table_name)
+        .select("*")
+        .gt("id", last_id)
+        .order("id", desc=False)
+        .limit(settings.hermes_poll_batch_size)
+        .execute()
+    )
+    return list(response.data or [])
+
+
+async def poll_supabase_events() -> None:
     require_supabase_settings(settings)
     client = create_supabase_client(settings)
-    print("GWPlaymate Hermes polling Supabase game_logs backup.", flush=True)
+    watermarks = load_poll_watermarks()
+    active_until = 0.0
+    print("GWPlaymate Hermes polling Supabase with stored watermarks.", flush=True)
     await asyncio.sleep(0)
 
     while True:
+        processed = 0
         try:
-            response = await asyncio.to_thread(
-                lambda: (
-                    client.table(GAME_LOGS_TABLE)
-                    .select("*")
-                    .order("id", desc=True)
-                    .limit(25)
-                    .execute()
-                )
+            game_logs = await asyncio.to_thread(fetch_records_after_id, client, GAME_LOGS_TABLE, watermarks["game_logs"])
+            for record in game_logs:
+                record_id = record.get("id")
+                if isinstance(record_id, int):
+                    watermarks["game_logs"] = max(watermarks["game_logs"], record_id)
+                if not is_stale_polled_record(record):
+                    processed += 1
+                    await handle_game_log_payload({"record": record}, use_ollama=settings.hermes_use_ollama)
+
+            alerts = await asyncio.to_thread(
+                fetch_records_after_id,
+                client,
+                ENVIRONMENT_ALERTS_TABLE,
+                watermarks["environment_alerts"],
             )
-            for record in reversed(response.data or []):
+            for record in alerts:
+                record_id = record.get("id")
+                if isinstance(record_id, int):
+                    watermarks["environment_alerts"] = max(watermarks["environment_alerts"], record_id)
                 if is_stale_polled_record(record):
                     continue
-                await handle_game_log_payload({"record": record}, use_ollama=settings.hermes_use_ollama)
-        except Exception as exc:
-            print(f"GWPlaymate Hermes game_logs poll error: {type(exc).__name__}.", flush=True)
-        await asyncio.sleep(2)
-
-
-async def poll_unprocessed_environment_alerts() -> None:
-    require_supabase_settings(settings)
-    client = create_supabase_client(settings)
-    print("GWPlaymate Hermes polling Supabase environment_alerts backup.", flush=True)
-    await asyncio.sleep(0)
-
-    while True:
-        try:
-            response = await asyncio.to_thread(
-                lambda: (
-                    client.table(ENVIRONMENT_ALERTS_TABLE)
-                    .select("*")
-                    .order("id", desc=True)
-                    .limit(25)
-                    .execute()
-                )
-            )
-            for record in reversed(response.data or []):
-                if is_stale_polled_record(record):
-                    continue
+                processed += 1
                 await handle_environment_alert_payload({"record": record}, use_ollama=settings.hermes_use_ollama)
+
+            if game_logs or alerts:
+                await asyncio.to_thread(save_poll_watermarks, watermarks)
+            if processed:
+                active_until = time.monotonic() + settings.hermes_poll_active_window_seconds
         except Exception as exc:
-            print(f"GWPlaymate Hermes environment_alerts poll error: {type(exc).__name__}.", flush=True)
-        await asyncio.sleep(2)
+            print(f"GWPlaymate Hermes Supabase poll error: {type(exc).__name__}.", flush=True)
+
+        delay = settings.hermes_poll_active_seconds if time.monotonic() < active_until else settings.hermes_poll_idle_seconds
+        await asyncio.sleep(delay)
 
 
 async def ambient_heartbeat_loop() -> None:
@@ -3654,16 +3685,19 @@ async def ambient_heartbeat_loop() -> None:
 
 
 async def main_async() -> None:
-    if settings.hermes_enable_realtime:
+    if _supabase_configured():
         require_supabase_settings(settings)
-        await subscribe_to_game_logs()
-        asyncio.create_task(poll_unprocessed_game_logs())
-        asyncio.create_task(poll_unprocessed_environment_alerts())
+        if settings.hermes_enable_realtime:
+            await subscribe_to_game_logs()
+        else:
+            asyncio.create_task(poll_supabase_events())
         asyncio.create_task(ambient_heartbeat_loop())
     mode = "Ollama" if settings.hermes_use_ollama else "fallback rules"
     print(f"GWPlaymate companion daemon listening on {settings.hermes_host}:{settings.hermes_port} ({mode}).")
     if settings.hermes_enable_realtime:
         print("Supabase Realtime subscription is enabled for audit/backfill events.")
+    elif _supabase_configured():
+        print("Supabase polling is enabled; Realtime subscriptions are disabled for free-tier safety.")
     config = uvicorn.Config(app, host=settings.hermes_host, port=settings.hermes_port, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()

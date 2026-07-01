@@ -187,6 +187,7 @@ private:
     void GenerateAndPlayCompanionTts(const QueuedTtsRequest& request);
     void WaitForTtsPlaybackSlot();
     void MarkTtsPlaybackStarted(const std::wstring& reply, uint32_t extra_delay_ms);
+    bool ShouldPollReplies() const;
     void ApplyConfig();
     void SetStatus(std::string status);
 
@@ -230,9 +231,9 @@ private:
     std::atomic_bool speech_bubbles_enabled_ = true;
     std::atomic_bool tts_enabled_ = true;
     std::atomic_bool environment_radar_enabled_ = true;
-    std::atomic<int> poll_interval_ms_ = 1000;
-    float poll_interval_sec_ = 1.0f;
-    float snapshot_interval_sec_ = 8.0f;
+    std::atomic<int> poll_interval_ms_ = 3000;
+    float poll_interval_sec_ = 3.0f;
+    float snapshot_interval_sec_ = 45.0f;
     float radar_interval_sec_ = 3.0f;
     char backend_url_input_[256] = "http://127.0.0.1:8787";
     char api_token_input_[160] = "";

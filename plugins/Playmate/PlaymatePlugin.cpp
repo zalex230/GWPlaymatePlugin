@@ -34,6 +34,7 @@
 #include <fstream>
 #include <format>
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -191,6 +192,22 @@ namespace {
                        return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
                    })
             != haystack.end();
+    }
+
+    std::string UrlEncode(const std::string& value)
+    {
+        std::ostringstream encoded;
+        encoded << std::uppercase << std::hex;
+        for (const unsigned char ch : value) {
+            if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+                encoded << static_cast<char>(ch);
+            }
+            else {
+                encoded << '%' << std::setw(2) << std::setfill('0') << static_cast<int>(ch);
+                encoded << std::setfill(' ');
+            }
+        }
+        return encoded.str();
     }
 
     bool IsMeaningfulSystemLine(const std::string& message)
@@ -747,8 +764,8 @@ void PlaymatePlugin::LoadSettings(const wchar_t* folder)
         const auto computer_folder = plugin_folder.parent_path();
         local_log_folder_ = (computer_folder.empty() ? plugin_folder : computer_folder) / L"Playmate";
     }
-    poll_interval_sec_ = std::clamp(poll_interval_sec_, 0.25f, 30.0f);
-    snapshot_interval_sec_ = std::clamp(snapshot_interval_sec_, 1.0f, 120.0f);
+    poll_interval_sec_ = std::clamp(poll_interval_sec_, 1.0f, 30.0f);
+    snapshot_interval_sec_ = std::clamp(snapshot_interval_sec_, 30.0f, 120.0f);
     radar_interval_sec_ = std::clamp(radar_interval_sec_, 2.0f, 30.0f);
     ApplyConfig();
 }
@@ -782,8 +799,8 @@ void PlaymatePlugin::DrawSettings()
     config_changed |= ImGui::Checkbox("Enable environment radar", &environment_radar_);
     config_changed |= ImGui::InputText("Local backend URL", backend_url_input_, sizeof(backend_url_input_));
     config_changed |= ImGui::InputText("Local API token", api_token_input_, sizeof(api_token_input_), ImGuiInputTextFlags_Password);
-    config_changed |= ImGui::SliderFloat("Reply poll interval", &poll_interval_sec_, 0.25f, 10.0f, "%.2fs");
-    config_changed |= ImGui::SliderFloat("Snapshot interval", &snapshot_interval_sec_, 1.0f, 60.0f, "%.0fs");
+    config_changed |= ImGui::SliderFloat("Reply poll interval", &poll_interval_sec_, 1.0f, 30.0f, "%.0fs");
+    config_changed |= ImGui::SliderFloat("Snapshot interval", &snapshot_interval_sec_, 30.0f, 120.0f, "%.0fs");
     config_changed |= ImGui::SliderFloat("Radar interval", &radar_interval_sec_, 2.0f, 15.0f, "%.1fs");
     if (config_changed) {
         ApplyConfig();
@@ -968,12 +985,19 @@ void PlaymatePlugin::WorkerLoop()
             else {
                 status_ = posted_remote ? "Captured and sent" : "Captured locally";
             }
+
+            if (posted_remote && IsReplyTriggerEvent(event.event_type)) {
+                next_poll = std::chrono::steady_clock::now();
+            }
         }
 
         const auto now = std::chrono::steady_clock::now();
         if (now >= next_poll) {
-            PollReplies();
-            next_poll = now + std::chrono::milliseconds(poll_interval_ms_.load());
+            if (ShouldPollReplies()) {
+                PollReplies();
+            }
+            const int delay_ms = ShouldPollReplies() ? poll_interval_ms_.load() : 60000;
+            next_poll = now + std::chrono::milliseconds(delay_ms);
         }
     }
 }
@@ -1104,6 +1128,20 @@ void PlaymatePlugin::PollReplies()
     }
 
     QueueReply({Utf8ToWide(content)});
+}
+
+bool PlaymatePlugin::ShouldPollReplies() const
+{
+    if (!telemetry_enabled_.load() || !backend_enabled_.load() || !reply_injection_enabled_.load()) {
+        return false;
+    }
+
+    std::lock_guard lock(status_mutex_);
+    const uint64_t now = MonotonicMs();
+    if (waiting_for_reply_) {
+        return true;
+    }
+    return last_reply_ms_ > 0 && now - last_reply_ms_ < 15000;
 }
 
 void PlaymatePlugin::QueueTelemetry(std::string event_type, std::string sender, std::string channel, std::string message)
@@ -1567,8 +1605,8 @@ void PlaymatePlugin::ShowCompanionSpeechBubble(const std::wstring& reply) const
 
 void PlaymatePlugin::ApplyConfig()
 {
-    poll_interval_sec_ = std::clamp(poll_interval_sec_, 0.25f, 30.0f);
-    snapshot_interval_sec_ = std::clamp(snapshot_interval_sec_, 1.0f, 120.0f);
+    poll_interval_sec_ = std::clamp(poll_interval_sec_, 1.0f, 30.0f);
+    snapshot_interval_sec_ = std::clamp(snapshot_interval_sec_, 30.0f, 120.0f);
     telemetry_enabled_.store(enabled_);
     local_capture_enabled_.store(local_capture_);
     backend_enabled_.store(send_to_backend_);
@@ -1784,7 +1822,11 @@ std::string PlaymatePlugin::EventsUrl() const
 std::string PlaymatePlugin::RepliesUrl() const
 {
     const auto [backend_url, _] = GetConfig();
-    return backend_url + "/v1/playmate/replies";
+    const std::string persona = CurrentPersonaName();
+    if (persona.empty()) {
+        return backend_url + "/v1/playmate/replies";
+    }
+    return backend_url + "/v1/playmate/replies?persona=" + UrlEncode(persona);
 }
 
 void PlaymatePlugin::OnSendChat(GW::HookStatus*, const GW::UI::UIMessage message_id, void* wparam, void*)

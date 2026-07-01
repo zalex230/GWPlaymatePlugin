@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from backend.shared.constants import SNAPSHOT_EVENT_TYPES
 from backend.shared.models import TelemetryEvent
 
+STATE_CHANGE_EVENT_TYPES = {"active_quest_changed", "map_change", "map_changed", "map_loaded", "plugin_started"}
+
 
 @dataclass
 class EventThrottle:
@@ -14,6 +16,9 @@ class EventThrottle:
 
     def should_accept(self, event: TelemetryEvent) -> bool:
         if event.event_type not in SNAPSHOT_EVENT_TYPES:
+            return True
+
+        if event.event_type in STATE_CHANGE_EVENT_TYPES:
             return True
 
         key = (event.persona, event.event_type, event.map_id, event.active_quest_id)

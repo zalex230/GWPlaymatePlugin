@@ -132,7 +132,9 @@ Run Hermes on the machine that hosts the local model or fallback daemon:
 python -m backend.hermes.daemon
 ```
 
-For the first plumbing test, leave `HERMES_USE_OLLAMA=false`. Once the closed loop works, set `HERMES_USE_OLLAMA=true` and configure `OLLAMA_HOST` / `OLLAMA_MODEL`.
+For free-tier Supabase use, leave `HERMES_ENABLE_REALTIME=false` and let Hermes poll with stored
+watermarks. For the first plumbing test, leave `HERMES_USE_OLLAMA=false`. Once the closed loop works,
+set `HERMES_USE_OLLAMA=true` and configure `OLLAMA_HOST` / `OLLAMA_MODEL`.
 
 Optional Kokoro TTS audio needs three pieces:
 
@@ -191,4 +193,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\plugins\Playmate\tools\rev
 - Keep local JSONL capture enabled during early playtesting so raw behavior can be audited.
 - Do expensive work outside the game process.
 - Rate-limit proactive alerts so the system stays useful and cheap.
+- Keep Supabase Realtime off by default; use REST polling and local JSONL capture for normal playtests.
 - Treat live plugin use as experimental. GWToolbox plugins are not officially permitted by ArenaNet.

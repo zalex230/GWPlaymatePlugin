@@ -4,6 +4,7 @@ __pycache__/
 
 # Local backend secrets and runtime logs
 backend/.env
+backend/.state/
 backend/logs/
 backend/hermes/personas/*.md
 !backend/hermes/personas/README.md

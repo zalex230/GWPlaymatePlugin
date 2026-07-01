@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from backend.shared.config import load_settings
 from backend.shared.constants import (
+    APPROVED_ENVIRONMENT_ALERT_TYPES,
     COMPANION_REPLIES_TABLE,
     ENVIRONMENT_ALERTS_TABLE,
     ENVIRONMENT_EVENT_TYPES,
@@ -37,6 +38,8 @@ def _insert_event(event: TelemetryEvent) -> dict[str, Any]:
         return {"accepted": False, "reason": "noisy_channel"}
     if event.event_type in SUPPRESSED_EVENT_TYPES:
         return {"accepted": False, "reason": "suppressed_event_type"}
+    if event.event_type in ENVIRONMENT_EVENT_TYPES and event.alert_type not in APPROVED_ENVIRONMENT_ALERT_TYPES:
+        return {"accepted": False, "reason": "unsupported_environment_alert"}
     if not throttle.should_accept(event):
         return {"accepted": False, "reason": "throttled"}
 

@@ -72,6 +72,21 @@ class StateAndThrottleTests(unittest.TestCase):
         self.assertTrue(throttle.should_accept(event))
         self.assertFalse(throttle.should_accept(event))
 
+    def test_snapshot_throttle_allows_state_change_events(self) -> None:
+        throttle = EventThrottle(snapshot_min_interval_seconds=60)
+        event = TelemetryEvent(
+            persona="A Test",
+            event_type="map_changed",
+            sender="System",
+            channel="system",
+            message="map_changed",
+            map_id=1,
+            active_quest_id=2,
+        )
+
+        self.assertTrue(throttle.should_accept(event))
+        self.assertTrue(throttle.should_accept(event))
+
 
 if __name__ == "__main__":
     unittest.main()

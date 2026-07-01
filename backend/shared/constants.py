@@ -12,6 +12,13 @@ SNAPSHOT_EVENT_TYPES = {
     "quest_details_changed",
 }
 ENVIRONMENT_EVENT_TYPES = {"environment_alert"}
+APPROVED_ENVIRONMENT_ALERT_TYPES = {
+    "combat_over",
+    "combat_started",
+    "danger_spike",
+    "enemy_patrol_nearby",
+    "under_attack",
+}
 GAMEPLAY_EVENT_TYPES = {
     "mission_objective_added",
     "mission_objective_completed",

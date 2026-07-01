@@ -151,14 +151,14 @@ begin
         alter publication supabase_realtime add table public.game_logs;
     end if;
 
-    if not exists (
+    if exists (
         select 1
         from pg_publication_tables
         where pubname = 'supabase_realtime'
           and schemaname = 'public'
           and tablename = 'companion_replies'
     ) then
-        alter publication supabase_realtime add table public.companion_replies;
+        alter publication supabase_realtime drop table public.companion_replies;
     end if;
 
     if not exists (
@@ -171,13 +171,13 @@ begin
         alter publication supabase_realtime add table public.environment_alerts;
     end if;
 
-    if not exists (
+    if exists (
         select 1
         from pg_publication_tables
         where pubname = 'supabase_realtime'
           and schemaname = 'public'
           and tablename = 'memories'
     ) then
-        alter publication supabase_realtime add table public.memories;
+        alter publication supabase_realtime drop table public.memories;
     end if;
 end $$;

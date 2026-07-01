@@ -72,9 +72,15 @@ Run this on the Mac Mini after installing the same requirements:
 python -m backend.hermes_daemon.daemon
 ```
 
-The daemon listens for `INSERT` events on `public.game_logs` using Supabase Postgres Changes. It keeps recent context in RAM, asks Ollama for a small JSON decision, and inserts approved lines into `companion_replies`.
-It also listens for `INSERT` events on `public.environment_alerts` so proactive radar events from the
-plugin can trigger companion comments without a player chat prompt.
+By default the daemon polls Supabase with stored row-id watermarks instead of opening a Realtime
+connection. This keeps the project inside Supabase's free-tier Realtime connection limits while still
+letting Supabase act as the audit and memory store. It reads new `game_logs` and `environment_alerts`
+rows, keeps recent context in RAM, asks Ollama for a small JSON decision, and inserts approved lines
+into `companion_replies`.
+
+`HERMES_ENABLE_REALTIME=true` is still supported for experiments, but leave it off for normal playtests.
+When Realtime is off, tune `HERMES_POLL_IDLE_SECONDS`, `HERMES_POLL_ACTIVE_SECONDS`, and
+`HERMES_POLL_ACTIVE_WINDOW_SECONDS` instead of adding more Realtime clients.
 
 For the first closed-loop test, leave `HERMES_USE_OLLAMA=false`. In this fallback mode Hermes replies
 deterministically to party `player_chat` rows, which proves the Supabase round trip without involving
@@ -138,8 +144,8 @@ based rather than continuous spam:
 - `danger_spike` when several enemies are close;
 - `combat_over` when combat clears.
 
-These alerts are stored in `environment_alerts`; Hermes consumes them through Realtime and writes any
-companion line to `companion_replies`.
+These alerts are stored in `environment_alerts`; Hermes consumes them through the free-tier polling
+loop by default and writes any companion line to `companion_replies`.
 
 ## Memories
 
@@ -160,6 +166,9 @@ enabled once the summarizer is stable.
 
 ## Supabase
 
-Run `backend/supabase/setup.sql` in the Supabase SQL editor. It is written to be idempotent and only adds minimal compatibility columns/publication membership needed by this backend.
+Run `backend/supabase/setup.sql` in the Supabase SQL editor. It is written to be idempotent and only
+adds minimal compatibility columns/publication membership needed by this backend. For free-tier safety,
+only `game_logs` and `environment_alerts` are kept in the `supabase_realtime` publication; replies and
+memories are read over REST/service-role calls instead.
 
 Keep `service_role` or secret keys out of the plugin and out of git.
