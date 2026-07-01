@@ -3325,7 +3325,7 @@ def recent_player_chat_in_supabase(persona: str, session_id: str, now: float, qu
         client = create_supabase_client(settings)
         response = (
             client.table(GAME_LOGS_TABLE)
-            .select("id,created_at,sender,channel,payload,metadata")
+            .select("id,created_at,sender,channel,payload")
             .eq("channel", "party")
             .order("created_at", desc=True)
             .limit(10)
@@ -3743,8 +3743,7 @@ async def main_async() -> None:
         require_supabase_settings(settings)
         if settings.hermes_enable_realtime:
             await subscribe_to_game_logs()
-        else:
-            asyncio.create_task(poll_supabase_events())
+        asyncio.create_task(poll_supabase_events())
         asyncio.create_task(ambient_heartbeat_loop())
     mode = "Ollama" if settings.hermes_use_ollama else "fallback rules"
     print(f"GWPlaymate companion daemon listening on {settings.hermes_host}:{settings.hermes_port} ({mode}).")

@@ -2063,6 +2063,66 @@ class HermesDaemonTests(unittest.TestCase):
         finally:
             hermes_daemon.recent_player_chat_in_supabase = original
 
+    def test_recent_player_chat_query_uses_existing_game_log_columns(self) -> None:
+        original_settings = hermes_daemon.settings
+        original_create_client = hermes_daemon.create_supabase_client
+        selected_columns: list[str] = []
+
+        class FakeQuery:
+            def select(self, columns: str) -> "FakeQuery":
+                selected_columns.append(columns)
+                return self
+
+            def eq(self, *_args: object) -> "FakeQuery":
+                return self
+
+            def order(self, *_args: object, **_kwargs: object) -> "FakeQuery":
+                return self
+
+            def limit(self, *_args: object) -> "FakeQuery":
+                return self
+
+            def execute(self) -> object:
+                created_at = datetime.now(timezone.utc).isoformat()
+
+                class Response:
+                    data = [
+                        {
+                            "id": 1,
+                            "created_at": created_at,
+                            "sender": "Player",
+                            "channel": "party",
+                            "payload": {
+                                "event_type": "player_chat",
+                                "persona": "Azele",
+                                "session_id": "session-1",
+                            },
+                        }
+                    ]
+
+                return Response()
+
+        class FakeClient:
+            def table(self, table_name: str) -> FakeQuery:
+                self.table_name = table_name
+                return FakeQuery()
+
+        try:
+            hermes_daemon.settings = replace(
+                original_settings,
+                supabase_url="https://example.supabase.co",
+                supabase_service_key="service-key",
+            )
+            hermes_daemon.create_supabase_client = lambda settings: FakeClient()
+
+            result = hermes_daemon.recent_player_chat_in_supabase("Azele", "session-1", time.time(), 60)
+
+            self.assertTrue(result)
+            self.assertEqual(selected_columns, ["id,created_at,sender,channel,payload"])
+        finally:
+            hermes_daemon.settings = original_settings
+            hermes_daemon.create_supabase_client = original_create_client
+
     def test_ambient_heartbeat_uses_ollama_generation_when_enabled(self) -> None:
         now = time.time()
         world_state.persona = "Azele"
