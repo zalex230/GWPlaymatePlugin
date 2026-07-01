@@ -47,6 +47,7 @@ from backend.hermes_daemon.daemon import (
     reply_expression,
     sanitize_memory_for_prompt,
     should_flush_memory_buffer,
+    should_use_fast_fallback_before_ollama,
     should_use_ollama_for_event,
     split_spoken_expression_label,
     validate_model_reply,
@@ -724,6 +725,47 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex(reply.response.lower(), r"scourge|beneath|maz|scourgeheart|forsaken|devona|elemental")
         self.assertNotEqual(reply.response, "Alright, tunnels then. Keep it tight and do not let them wrap around us.")
 
+    def test_fallback_maps_short_scourge_ask_to_scourge_beneath(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "wanna do scourge?",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 148,
+                    "map_name": "Ascalon City",
+                    "active_quest_id": 1456,
+                    "active_quest_name": "garbled quest text",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"scourge|beneath|maz|scourgeheart|forsaken|devona|elemental")
+        self.assertNotRegex(reply.response.lower(), r"one more detail|tell me what|could be|maybe")
+
+    def test_high_confidence_gw1_context_skips_slow_ollama_path(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "wanna do scourge?",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 148,
+                    "map_name": "Ascalon City",
+                    "active_quest_id": 1456,
+                },
+            }
+        )
+
+        self.assertTrue(should_use_fast_fallback_before_ollama(event))
+
     def test_gw1_resolver_maps_tunnel_run_to_scourge_beneath(self) -> None:
         event = event_from_game_log(
             {
@@ -1230,10 +1272,9 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(
             [reply.message for reply in replies],
-            ["Yes. They threaten Ascalon, so we prepare and hit them properly."],
+            ["Yes. Charr threaten Ascalon. We prepare, then go past the Wall."],
         )
-        self.assertEqual(len(prompts), 1)
-        self.assertIn("defending Ascalon", prompts[0])
+        self.assertEqual(len(prompts), 0)
 
     def test_azele_charr_leveling_plan_understands_player_intent(self) -> None:
         decision = fallback_rule_decision(
@@ -1433,10 +1474,9 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(
             [reply.message for reply in replies],
-            ["We would not. Not while they are threatening Ascalon."],
+            ["We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second."],
         )
-        self.assertEqual(len(prompts), 1)
-        self.assertIn("Never imply Charr need saving", prompts[0])
+        self.assertEqual(len(prompts), 0)
 
     def test_azele_fallback_handles_inventory_continuation_before_ready_keyword(self) -> None:
         decision = fallback_rule_decision(

@@ -1837,12 +1837,21 @@ def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
 
 
 def should_use_fast_fallback_before_ollama(event: TelemetryEvent) -> bool:
-    return (
-        event.event_type == "player_chat"
-        and event.channel == "party"
-        and event.persona.strip().lower() == "azele"
-        and is_alcohol_consumable_context(event.message)
-    )
+    if event.event_type != "player_chat" or event.channel != "party" or event.persona.strip().lower() != "azele":
+        return False
+    if is_alcohol_consumable_context(event.message):
+        return True
+    context = resolve_gw1_context(event)
+    return context.matched and context.confidence >= 0.88 and context.entry_id in {
+        "quest.scourge_beneath",
+        "title.ldoa",
+        "enemy.charr",
+        "loot.black_dye",
+        "loot.purple",
+        "item.red_iris",
+        "gear.krytan_leggings",
+        "npc.devona_pet",
+    }
 
 
 def should_consider_speaking_for_event(event: TelemetryEvent) -> bool:
@@ -2490,7 +2499,7 @@ def azele_devona_pet_reply(message: str) -> str:
     if "warthog" in lowered:
         return first_fresh_reply(
             [
-                "A warthog for Devona would be funny, but maybe too on the nose.",
+                "A warthog for Devona would be funny, but too on the nose.",
                 "Warthog works if we want sturdy. I still think she deserves something quicker.",
                 "A warthog is practical. Not graceful, but Devona probably would not care.",
             ]
@@ -2568,15 +2577,17 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
     return False
 
 
+CHARR_MENTION_PATTERN = re.compile(r"\bcha?rr?\b", re.IGNORECASE)
+
 CHARR_ACTION_PATTERN = re.compile(
-    r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcharr\b"
-    r"|\bcharr\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
+    r"\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b.*\bcha?rr?\b"
+    r"|\bcha?rr?\b.*\b(?:hunt(?:ing)?|kill(?:ing)?|fight(?:ing)?|slay(?:ing)?|stop(?:ping)?|take\s+(?:on|out))\b",
     re.IGNORECASE,
 )
 
 CHARR_SAVE_PATTERN = re.compile(
-    r"\b(?:save|saving|spare|rescue|protect)\b.*\bcharr\b"
-    r"|\bcharr\b.*\b(?:save|saving|spare|rescue|protect)\b",
+    r"\b(?:save|saving|spare|rescue|protect)\b.*\bcha?rr?\b"
+    r"|\bcha?rr?\b.*\b(?:save|saving|spare|rescue|protect)\b",
     re.IGNORECASE,
 )
 
@@ -2585,7 +2596,7 @@ def azele_charr_intent_reply(event: TelemetryEvent) -> str | None:
     if event.persona.strip().lower() != "azele":
         return None
     message = readable_game_text(event.message).lower()
-    if "charr" not in message:
+    if not CHARR_MENTION_PATTERN.search(message):
         return None
     if CHARR_SAVE_PATTERN.search(message):
         return "We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second."
@@ -2806,7 +2817,7 @@ def azele_gw1_context_reply(context: ResolvedGameContext, event: TelemetryEvent)
         return azele_scourge_beneath_reply(message)
     if context.entry_id == "title.ldoa":
         return azele_ldoa_reply(message)
-    if context.entry_id == "enemy.charr" and "charr" in message:
+    if context.entry_id == "enemy.charr" and CHARR_MENTION_PATTERN.search(message):
         return azele_charr_intent_reply(event) or "Charr threaten Ascalon. We get ready, then we hit them hard."
     if context.entry_id == "loot.black_dye":
         source_name = readable_game_text(getattr(event, "agent_name", ""))

@@ -73,6 +73,21 @@ BASE_DIALOGUE_CASES: tuple[EvalCase, ...] = (
         severity="critical",
     ),
     EvalCase(
+        id="scourge-short-ask",
+        event=_player_event(
+            "wanna do scourge?",
+            map_id=148,
+            map_name="Ascalon City",
+            active_quest_id=1456,
+            active_quest_name="",
+        ),
+        expected_intent="quest",
+        expected_topic="The Scourge Beneath",
+        required_anchors=("Scourge",),
+        forbidden_patterns=("one more detail", "tell me what", "could be", "maybe"),
+        severity="critical",
+    ),
+    EvalCase(
         id="ldoa-slang",
         event=_player_event("what's the LDoA plan from here?", map_name="Ashford Abbey"),
         expected_intent="title",

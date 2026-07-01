@@ -70,7 +70,7 @@ def score_case(case: EvalCase) -> tuple[bool, EvalFailure | None, bool]:
         reasons.append("reply_too_long")
 
     fallback_like = bool(FALLBACK_LIKE_PATTERN.search(reply))
-    if fallback_like and case.severity == "critical":
+    if fallback_like and case.expected_intent not in {"unknown", "combat"}:
         reasons.append("generic_fallback_like")
 
     if reasons:
@@ -93,8 +93,8 @@ def score_case(case: EvalCase) -> tuple[bool, EvalFailure | None, bool]:
 def run_eval(total: int, failure_limit: int) -> tuple[EvalSummary, list[EvalFailure]]:
     original_recent_reply_lines = hermes_daemon.recent_reply_lines
     original_recent_conversation_context = hermes_daemon.recent_conversation_context
-    hermes_daemon.recent_reply_lines = lambda: []
-    hermes_daemon.recent_conversation_context = lambda limit=10: ""
+    hermes_daemon.recent_reply_lines = lambda *args, **kwargs: []
+    hermes_daemon.recent_conversation_context = lambda *args, **kwargs: ""
     try:
         started = perf_counter()
         passed = 0
