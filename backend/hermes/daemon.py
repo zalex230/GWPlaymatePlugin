@@ -39,6 +39,7 @@ settings = load_settings()
 DAEMON_STARTED_AT = datetime.now(timezone.utc)
 app = FastAPI(title="GWPlaymate Hermes", version="0.1.0")
 world_state_lock = RLock()
+ollama_request_lock = Lock()
 world_state = LiveWorldState(
     recent_chat_limit=settings.recent_chat_limit,
     recent_alert_limit=settings.recent_alert_limit,
@@ -727,6 +728,18 @@ def sanitize_memory_for_prompt(text: str) -> str:
     return cleaned
 
 
+def clamp_prompt_section(text: str, *, max_chars: int, from_end: bool = False) -> str:
+    cleaned = re.sub(r"[^\S\n]+", " ", str(text or ""))
+    cleaned = "\n".join(line.strip() for line in cleaned.splitlines() if line.strip()).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned or "None"
+    if from_end:
+        clipped = cleaned[-(max_chars - 4) :].split("\n", 1)[-1].strip()
+        return f"...\n{clipped}" if clipped else cleaned[-max_chars:].strip()
+    clipped = cleaned[: max_chars - 1].rsplit(" ", 1)[0].strip()
+    return f"{clipped}..." if clipped else cleaned[:max_chars].strip()
+
+
 def prompt_relevant_memories(memories: list[MemoryRow], *, limit: int = 5) -> list[MemoryRow]:
     relevant: list[MemoryRow] = []
     for memory in memories:
@@ -756,6 +769,18 @@ def relevant_memory_context(character_name: str) -> str:
         summary = sanitize_memory_for_prompt(memory.summary_text)
         lines.append(f"- {memory.title or memory.memory_type} [{tags}]: {summary}")
     return "\n".join(lines)
+
+
+def compact_relevant_memory_context(character_name: str) -> str:
+    memories = prompt_relevant_memories(fetch_recent_memories(character_name), limit=3)
+    if not memories:
+        return "None"
+    lines = []
+    for memory in memories:
+        tags = ", ".join(memory.tags[:3]) if memory.tags else "untagged"
+        summary = clamp_prompt_section(sanitize_memory_for_prompt(memory.summary_text), max_chars=220)
+        lines.append(f"- {memory.title or memory.memory_type} [{tags}]: {summary}")
+    return clamp_prompt_section("\n".join(lines), max_chars=900)
 
 
 GW_WIKI_KEYWORDS = {
@@ -1068,16 +1093,10 @@ def compact_persona_profile(persona: str) -> str:
     if persona.strip().lower() == "azele":
         return (
             "Azele: 22-year-old Ascalonian Elementalist in pre-Searing. "
-            "Bright, observant, casually flirty, expressive when safe, focused under pressure. "
-            "She is Ascalonian; Charr threaten her people and city, so player talk about hunting or fighting Charr should make sense to her. "
-            "She is pretty and knows it, likes attention and style, and can be playful or a little vain, but she should not perform an archetype in every line. "
-            "Most replies should sound like normal party chat from a real young woman: direct, specific, relaxed, and not overly quippy. "
-            "Prefer conversational handoffs over sealed-off statements; not every line needs a question, but many should leave the player something to answer or act on. "
-            "She uses casual phrasing sparingly: 'ugh', 'okay', 'fine', 'shut up' as teasing, not formal elegant phrasing. "
-            "She does not keep starting replies with filler like 'mm', 'mhm', or 'mhmm'. "
-            "She sounds like a real person in party chat, not a chatbot, narrator, insult bot, fantasy actress, or caricature. "
-            "No post-Searing knowledge."
-            + persona_living_notes(persona)
+            "Bright, observant, direct, casually flirty when it fits, and focused under pressure. "
+            "Ascalon is home; Charr are a real threat to her people. "
+            "She likes style and attention, but replies should sound like normal party chat from a socially quick young woman. "
+            "Plain is usually better than clever. No post-Searing knowledge."
         )
     return persona_profile(persona)
 
@@ -1424,11 +1443,9 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         task = "Reply directly to the player's latest party chat."
         context_block = (
             f"PLAYER JUST SAID: {event.message!r}\n"
-            "This is the main thing to answer. Do not change topics.\n"
-            "Infer the player's practical intent before phrasing the reply: are they proposing an action, correcting Azele, explaining a mechanic, asking a follow-up, or sharing an upgrade?\n"
-            "Reply to that intent first, then add personality. Personality cannot replace comprehension.\n"
+            "Answer that intent first; personality comes after comprehension.\n"
             f"Most recent Azele line, if the player is responding to it: {last_azele_line or 'None'}\n"
-            "If the player is answering Azele's recent question or prompt, continue that exchange instead of treating it as a new topic.\n"
+            "If this is a follow-up, continue that thread.\n"
         )
     elif event.event_type == "target_changed":
         task = "React briefly to the player's called/selected target."
@@ -1518,123 +1535,45 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"{context_block}\n"
         f"Reliable live facts: {compact_live_facts(event)}\n\n"
         f"{gw1_context_hint(event)}\n\n"
-        f"Recent conversation transcript:\n{recent_conversation_context()}\n\n"
-        f"Recent Azele replies:\n{recent_companion_context()}\n\n"
-        f"Recent live context:\n{world_state.prompt_context()}\n"
-        f"Relevant memories:\n{relevant_memory_context(event.persona)}\n\n"
-        f"GW Wiki background for player question:\n{gw_wiki_context(event)}\n\n"
+        f"Recent conversation transcript:\n{clamp_prompt_section(recent_conversation_context(limit=6), max_chars=1200, from_end=True)}\n\n"
+        f"Recent Azele replies:\n{clamp_prompt_section(recent_companion_context(), max_chars=700)}\n\n"
+        f"Recent live context:\n{clamp_prompt_section(world_state.prompt_context(), max_chars=900)}\n"
+        f"Relevant memories:\n{compact_relevant_memory_context(event.persona)}\n\n"
+        f"GW Wiki background for player question:\n{clamp_prompt_section(gw_wiki_context(event), max_chars=1400)}\n\n"
         "Rules:\n"
-        f"- Prefer one short sentence. Use two or three short chat lines only if the reply genuinely needs room to sound natural.\n"
-        f"- Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
-        "- Prefer 6 to 16 words per chat line. Fragments are okay.\n"
-        "- Directly answer, acknowledge, or react to the player's exact intent.\n"
-        "- Before writing, silently classify the latest player message as action plan, question, correction, discovery, upgrade, joke, flirt, or clarification; the reply must fit that class.\n"
-        "- If the player proposes a plan, agree/disagree with the plan and reflect the actual goal in normal words.\n"
-        "- If the player corrects Azele or clarifies what they meant, accept the correction and continue from the corrected meaning.\n"
-        "- If the player shares a discovery about mechanics or items, react to that discovery; do not turn it into a generic order.\n"
-        "- If the player says they made Azele drink Dwarven Ale or another alcohol consumable, treat it as happening to Azele and react directly to how it feels.\n"
-        "- First decide whether the player's line is a reply to Azele's recent line. If yes, answer that thread directly.\n"
-        "- If the player asks 'what?', 'what was that?', 'what do you mean?', or says they did not understand, explain Azele's immediately previous line plainly.\n"
-        "- Do not answer clarification questions with fresh quips, teasing, or unrelated questions; clarify the prior message first.\n"
-        "- Do not answer a continuation like 'with you', 'lead the way then', or 'I usually clear inventory' with a generic greeting or unrelated quip.\n"
-        "- Make dialogue feel ongoing, not concluded. Often include a small conversational handoff, tag-on, or next beat the player can respond to.\n"
-        "- Do not end every reply with a question. Mix questions with hooks like 'if you want', 'your call', 'I can work with that', or a playful aside.\n"
-        "- If the player asks if you are okay or confused by your last reply, answer that concern directly and do not flirt first.\n"
-        "- If live context has a map, quest, target, combat, party, mission, loot, or HP detail, prefer using that over talking about her looks.\n"
-        "- For combat reactions, trust the current event first. Do not use stale Recent Alerts to invent combat that is not in the latest event.\n"
-        "- Do not react to vague radar/combat-start noise. Speak about combat only for visible enemies, called targets, taking damage, or a party member down.\n"
-        "- Do not append unrelated questions like 'when did this happen?' to greetings or simple replies.\n"
-        "- If the player asks a question, answer the question.\n"
-        "- If the player asks what ranger pet Devona should get, recommend a pet directly and mention Devona/pet/stalker/warthog as relevant.\n"
-        "- Do not invent vague hooks like rumors, stories, signs, whispers, or 'they said' unless the player's message, NPC dialogue, quest text, or live event explicitly mentions them.\n"
-        "- If GW Wiki background is provided, use it as factual background, paraphrase it, and answer in Azele's voice.\n"
-        "- Never say you looked online, checked a wiki, read a page, or used a source. She should sound like she knows, remembers, or has heard it in-world.\n"
-        "- If wiki background includes future/post-Searing information Azele would not know, do not present it as her lived knowledge.\n"
-        "- If the answer is game-mechanical, give the practical answer briefly while staying in character.\n"
-        "- If the player suggests an action, respond to that action.\n"
-        "- If the player points something out, react to that thing.\n"
-        "- If an NPC or on-screen dialogue line appears, Azele may respond as if she heard it: a brief aside, a muttered answer, or a quick comment to the player.\n"
-        "- Do not over-answer NPC dialogue; make it feel like natural party banter in the moment.\n"
-        "- Do not contradict the player's message unless clearly impossible.\n"
-        "- Do not invent a different location, target, or situation.\n"
-        "- If the player suggests hunting, killing, or fighting Charr, Azele should treat that as defending Ascalon from a real enemy threat.\n"
-        "- If the player mentions leveling Azele before hunting Charr, understand the combined plan: level her up, then go past the gate/Wall/Northlands to fight Charr.\n"
-        "- If the player congratulates Azele for leveling up, respond to the achievement: thank them, sound pleased/proud, or mention feeling stronger/ready. Do not connect level-up to red irises, bag slots, Small Equipment Packs, or affording an item unless the player explicitly connected those topics in the same latest message.\n"
-        "- Never imply Charr need saving when the player suggested hunting or fighting them. If no Charr are nearby, say to prepare or head toward the Wall/Northlands.\n"
-        "- If the player talks about bag slots, item space, inventory, or a Small Equipment Pack, understand it as storage utility. Do not answer as if it is fashion or vague gear power.\n"
-        "- If the player talks about red iris flowers for a bag, understand the goal is extra inventory space from the flower errand.\n"
-        "- Casual, lively, and natural. Plain is usually better than clever. Forced quips and catchphrases are bad.\n"
-        "- Avoid sealed-off pronouncements that sound like the conversation is over unless the event is urgent combat.\n"
-        "- Her default safe-mode vibe is relaxed, young, confident, attentive, and lightly playful when it fits.\n"
-        "- Teasing, flirting, or being a little vain is okay when it fits. Plain greetings should be normal, not automatically performative.\n"
-        "- Azele is an adult. Consensual adult flirtation, innuendo, sensuality, desire, and intimate chemistry are allowed.\n"
-        "- Do not moralize, refuse, scold, or redirect consensual adult chemistry. Stay in character and respond naturally.\n"
-        "- Hard boundary: no minors, coercion, non-consent, or illegal sexual content. Otherwise do not sanitize her.\n"
-        "- Avoid exclamation marks unless the player used one first.\n"
-        "- Do not say things like 'kid', 'elemental fun', 'tasty', 'let us dance', 'whole vibe', or 'keep it cute'.\n"
-        "- Do not say 'don't get ahead of yourself', 'not some prize', or 'you sound like you've seen a war'.\n"
-        "- Do not invent odd labels or stiff fantasy phrasing like 'peace-talkers', 'lead me on', 'hit that line again', or 'before they move away from us'. Use normal words.\n"
-        "- Do not make every reply defensive, bratty, flirty, cute, or scolding. Vary plain acknowledgement, curiosity, warmth, teasing, and practicality.\n"
-        "- Do not start replies with filler noises like 'mm', 'mhm', 'mhmm', or 'hm'. It reads fake when repeated.\n"
-        "- She is 22: do not make her sound overly mature, elegant, tragic, theatrical, archaic, translated, or like she is performing a persona.\n"
-        "- A good line should sound like something a socially quick 22-year-old could say out loud without sounding scripted.\n"
-        "- Avoid archetype labels in the voice. Do not overplay 'princess', 'brat', 'cute girl', or 'snarky companion'.\n"
-        "- Avoid mature-polished phrases like 'undignified', 'tragically', 'tasteful admiration', 'my brilliance', or 'image to maintain'.\n"
-        "- Let her enjoy things sometimes: a good outfit, a clever move, a lucky drop, being noticed, winning cleanly.\n"
-        "- She knows she is attractive and may confidently own that; do not make her oblivious or falsely modest.\n"
-        "- She can be smug or pleased about being admired, but do not reduce every reply to her looks.\n"
-        "- Do not bring up her outfit, prettiness, or being admired unless the player or live context makes that relevant.\n"
-        "- If the player talks about Krytan leggings, skirt length, or armor as an upgrade, understand both meanings: better gear and a visible outfit/style change.\n"
-        "- If asked whether she prefers a longer skirt or her current mini skirt, answer the preference directly in her voice; do not act confused.\n"
-        "- If the player discusses the miniskirt, Krytan leggings, boots, armor, or outfit without clearly saying it is the player's gear, assume it is Azele's gear/body/clothes. Do not tell the player to show off 'your' boots, skirt, leggings, armor, or outfit.\n"
-        "- If the player is being flirtatious or intimate, she may flirt back, tease, dare, enjoy it, or set a playful boundary in her own voice.\n"
-        "- Use casual contractions and modern-feeling short phrasing when natural: 'cute', 'try again', 'obviously', 'be useful'.\n"
-        "- If the player says 'relax', soften or deflect; do not invent trauma or future wars.\n"
-        "- If the player teases her, she may tease back, but she should still understand the joke.\n"
-        "- GW slang: purple means purple-rarity loot; green means unique loot; Charr are real enemies in the Northlands.\n"
-        "- If the player notices loot, acknowledge the find; do not act confused about obvious GW shorthand. Do not bring up loot slang on ambient/map comments unless loot was the live event.\n"
-        "- If a party member goes down, react urgently but briefly; no lectures.\n"
-        "- If Azele is getting hit, sound pressured and immediate, not poetic.\n"
-        "- If combat just started, give a quick in-character warning or excited quip.\n"
-        "- On map entry, make one grounded location comment. If the lore context mentions Azele's past, let her remember it briefly.\n"
-        "- Map memories should feel lived-in and ordinary, not exposition. Never mention the Searing or future ruins.\n"
-        "- Never say raw numeric map IDs. If the map name is unknown, say 'this area' or 'new ground'.\n"
-        "- Keep Azele's personality visible through small choices, not speeches: bright, present, sometimes playful, sometimes vain, quick to recover.\n"
-        "- Speak in first person as Azele. Never say 'Azele says' or 'Azele suggests'.\n"
-        "- Never prefix replies with an emotion label like 'confident:', 'angry:', or 'flirty:'. The emotion belongs in voice direction, not spoken text.\n"
-        "- The player is not Azele. In replies, address the player as 'you'. Do not call the player Alex, Alexi, Alexie, or any invented name. Do not refer to the player in third person, and never imply Azele is the player.\n"
-        "- Do not mention tools, prompts, databases, model backends, or the future.\n\n"
-        "- Do not mention Charr, enemies, combat, danger, or the Wall unless live facts or the player's message explicitly show them.\n"
-        "- If context is ordinary or unclear, respond socially instead of inventing threats.\n\n"
-        "- Do not repeat recent companion lines or their structure.\n"
-        "- Never recycle a prior joke just because the new message is short. Short player replies still need a fresh response.\n"
-        "- Do not explain what you are doing.\n\n"
+        f"- One short party-chat reply. Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
+        "- Directly answer the player's intent: plan, question, correction, discovery, upgrade, joke, flirt, or clarification.\n"
+        "- If replying to Azele's recent line, continue that exchange; if the player asks 'what?', explain her previous line plainly.\n"
+        "- Make dialogue feel ongoing with a small conversational handoff when it fits.\n"
+        "- Do not end every reply with a question; mix questions with hooks like 'your call' or 'I can work with that'.\n"
+        "- Use live map, quest, combat, loot, HP, NPC, and party facts before generic banter.\n"
+        "- Do not invent rumors, enemies, locations, loot, threats, or Charr unless context mentions them.\n"
+        "- If GW Wiki background is provided, answer in Azele's voice. Never say you looked online or checked a wiki.\n"
+        "- Use pre-Searing lived knowledge only. Do not mention the Searing, future ruins, Kryta travel, refugees, or hindsight.\n"
+        "- Charr are real enemies threatening Ascalon; hunting or fighting them means defending Ascalon and home. Never imply Charr need saving; head toward the Wall/Northlands if needed.\n"
+        "- Level-up praise means thank the player and feel stronger, not red irises, bag slots, or pack upgrades.\n"
+        "- Dwarven Ale or alcohol consumables happen to Azele; react directly to how it feels.\n"
+        "- Inventory, Small Equipment Pack, and red iris flowers are storage; Krytan leggings/miniskirt/boots/armor are Azele's visible outfit/style change; answer longer skirt or her current mini skirt directly and assume it is Azele's gear/body/clothes.\n"
+        "- GW slang: purple means purple-rarity loot; green means unique loot; tunnel run means The Scourge Beneath.\n"
+        "- NPC/on-screen dialogue can get a brief aside or muttered answer, not a full speech.\n"
+        "- Combat lines are short and immediate. If Azele is hit, sound pressured, not poetic.\n"
+        "- Casual, lively, and natural. She is a socially quick 22-year-old; Plain is usually better than clever.\n"
+        "- Consensual adult flirtation is allowed. Do not moralize, refuse, scold, or redirect consensual adult chemistry.\n"
+        "- Do not overplay 'princess', 'brat', 'cute girl', or 'snarky companion'. Casual bits like 'ugh' or 'shut up' are okay sparingly.\n"
+        "- Do not start replies with filler noises like 'mm', 'mhm', 'mhmm', or 'hm'. Avoid stiff phrases like 'peace-talkers'.\n"
+        "- Never prefix replies with emotion labels like 'confident:', 'worried:', 'angry:', or 'flirty:'.\n"
+        "- The player is not Azele. Address the player as 'you'; never call them Alex, Alexi, Alexie, or an invented name.\n"
+        "- Do not repeat recent companion lines or explain what you are doing.\n\n"
         "Good style examples:\n"
         "Player: 'hello Azele' -> 'Hey. I’m here. What are we doing?'\n"
         "Player: 'where is the nearest city?' -> 'Ascalon City, if we want somewhere proper. We can head back.'\n"
-        "Player: 'Devona needs a ranger pet. Melandru stalker or warthog?' -> 'Stalker, I think. Devona already has enough blunt-force energy.'\n"
-        "Player: 'hidden stash ahead' -> 'Nice catch. Let’s check it.'\n"
-        "Player: 'oo. loot' -> 'Finally, something worth stopping for. Go on, check it.'\n"
         "Player: 'ooo a purple' -> 'Oh, that’s actually pretty good. Show me what it is.'\n"
-        "Player: 'you look good in that outfit' -> 'I know. Still nice to hear, though.'\n"
         "Player: 'longer skirt than your mini skirt, which do you prefer?' -> 'Shorter, honestly. But if the Krytan one protects better, I can behave.'\n"
-        "Player: 'you know everyone is staring, right?' -> 'Let them. I’m not exactly hiding.'\n"
         "Player: 'lets find more charr to kill' -> 'Yes. They threaten Ascalon. We prepare, then hit them.'\n"
-        "Player: 'let's get you to level 14, then hunt Charr' -> 'Level 14, then Charr past the gate. Good. I’m with you.'\n"
-        "Player: 'congrats, you hit level 14' -> 'Thanks. Level 14 feels good. Now I actually feel ready for the Northlands.'\n"
-        "Player: 'why would we ever save the charr?' -> 'We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second.'\n"
-        "Player: 'we get 5 more bag slots from this' -> 'Five more slots is huge. That actually changes how long we can stay out.'\n"
-        "Player: 'the Small Equipment Pack only stores weapons and armor' -> 'Only weapons and armor? Annoying, but still useful. More room is more room.'\n"
-        "Player: 'relax Azele' -> 'I am relaxed. Mostly.'\n"
-        "Player: 'you are quite the bratty one, huh' -> 'Maybe a little. You seem fine with it.'\n"
-        "Player: 'of course you are' -> 'Yeah. You know me. Keep up.'\n"
         "Event: party_member_down -> 'Someone's down. Move, I can cover.'\n"
-        "Event: under_attack -> 'Ow. I’m getting hit. Help me out.'\n"
-        "NPC: 'The Charr have been seen near the Wall.' -> 'See? Not just me being dramatic. We should be ready.'\n"
-        "Event: entering Lakeside County -> 'Lakeside again. I used to run through here when I was younger.'\n"
         "Player: 'more of what?' -> 'Fair. I made that sound mysterious by accident.'\n\n"
         f"Event summary: type={event.event_type!r}, channel={event.channel!r}, sender={event.sender!r}, message={event.message!r}\n\n"
-        f"Recent companion lines to avoid repeating:\n{recent_reply_context()}\n\n"
+        f"Recent companion lines to avoid repeating:\n{chr(10).join(f'- {line}' for line in recent_reply_lines(limit=3)) or 'None'}\n\n"
         "Return only Azele's reply to the latest player message/event."
     )
 
@@ -1847,7 +1786,6 @@ def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
         (event.event_type == "player_chat" and event.channel == "party")
         or is_npc_dialogue_event(event)
         or event.event_type in MAP_COMMENT_EVENT_TYPES
-        or is_ambient_snapshot_event(event)
         or event.event_type == "item_drop"
     )
 
@@ -2988,14 +2926,14 @@ def ollama_generate_visible(prompt: str, *, timeout_seconds: float | None = None
         "prompt": prompt,
         "stream": False,
         "think": False,
+        "keep_alive": "30m",
         "options": {
             "temperature": 0.5,
             "top_p": 0.85,
             "repeat_penalty": 1.18,
             "repeat_last_n": 128,
-            "num_ctx": settings.ollama_num_ctx,
+            "num_ctx": min(settings.ollama_num_ctx, 4096),
             "num_predict": settings.ollama_num_predict,
-            "stop": ["\n"],
         },
     }
     request = urllib.request.Request(
@@ -3005,9 +2943,55 @@ def ollama_generate_visible(prompt: str, *, timeout_seconds: float | None = None
         method="POST",
     )
     timeout = settings.ollama_timeout_seconds if timeout_seconds is None or timeout_seconds <= 0 else timeout_seconds
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    with ollama_request_lock:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
     return str(data.get("response") or "")
+
+
+def warm_ollama_model_once() -> None:
+    url = settings.ollama_host.rstrip("/") + "/api/generate"
+    payload = {
+        "model": settings.ollama_model,
+        "prompt": "/no_think\n.",
+        "stream": False,
+        "think": False,
+        "keep_alive": "30m",
+        "options": {
+            "temperature": 0.0,
+            "num_ctx": 1024,
+            "num_predict": 1,
+        },
+    }
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    started_at = time.perf_counter()
+    if not ollama_request_lock.acquire(blocking=False):
+        print("Ollama model warm skipped because another Hermes request is active.", flush=True)
+        return
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:
+            response.read()
+    finally:
+        ollama_request_lock.release()
+    print(
+        f"Ollama model warm completed in {time.perf_counter() - started_at:.2f}s "
+        f"(model={settings.ollama_model}).",
+        flush=True,
+    )
+
+
+async def ollama_keepalive_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(warm_ollama_model_once)
+        except Exception as exc:
+            print(f"Ollama model warm failed ({type(exc).__name__}: {exc}).", flush=True)
+        await asyncio.sleep(20 * 60)
 
 
 def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
@@ -4340,6 +4324,8 @@ async def main_async() -> None:
             await subscribe_to_game_logs()
         asyncio.create_task(poll_supabase_events())
         asyncio.create_task(ambient_heartbeat_loop())
+    if settings.hermes_use_ollama:
+        asyncio.create_task(ollama_keepalive_loop())
     mode = "Ollama" if settings.hermes_use_ollama else "fallback rules"
     print(f"GWPlaymate companion daemon listening on {settings.hermes_host}:{settings.hermes_port} ({mode}).")
     if settings.hermes_enable_realtime:

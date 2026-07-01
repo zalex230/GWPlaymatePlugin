@@ -500,12 +500,11 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("'ugh'", prompt)
         self.assertIn("'shut up'", prompt)
         self.assertIn("Do not start replies with filler noises", prompt)
-        self.assertIn("do not make her sound overly mature", prompt.lower())
         self.assertIn("socially quick 22-year-old", prompt)
         self.assertIn("peace-talkers", prompt)
         self.assertIn("The player is not Azele", prompt)
-        self.assertIn("address the player as 'you'", prompt)
-        self.assertIn("made Azele drink Dwarven Ale", prompt)
+        self.assertIn("Address the player as 'you'", prompt)
+        self.assertIn("Dwarven Ale or alcohol consumables happen to Azele", prompt)
         self.assertIn("react directly to how it feels", prompt)
         self.assertIn("nearest city?' -> 'Ascalon City", prompt)
         self.assertNotIn("nearest city?' -> 'Ashford", prompt)
@@ -529,9 +528,9 @@ class HermesDaemonTests(unittest.TestCase):
             "Most recent Azele line, if the player is responding to it: City air helps. What do you usually do first",
             prompt,
         )
+        self.assertIn("continue that thread", prompt)
+        self.assertIn("clear out inventory", prompt)
         self.assertIn("continue that exchange", prompt)
-        self.assertIn("I usually clear inventory", prompt)
-        self.assertIn("answer that thread directly", prompt)
         self.assertIn("City air helps. What do you usually do first", recent_companion_context())
 
     def test_prompt_includes_recent_conversation_transcript(self) -> None:
@@ -551,8 +550,7 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("Recent conversation transcript", prompt)
         self.assertIn("[Player]: what was that?", prompt)
         self.assertIn("[Azele]: I meant the Ranik soldiers", prompt)
-        self.assertIn("explain Azele's immediately previous line plainly", prompt)
-        self.assertIn("Do not answer clarification questions with fresh quips", prompt)
+        self.assertIn("explain her previous line plainly", prompt)
 
     def test_fallback_clarification_references_previous_reply(self) -> None:
         recent_reply_texts.append("Ranik has that soldier-stiff feeling again. Do you think they practice that?")
@@ -1432,9 +1430,9 @@ class HermesDaemonTests(unittest.TestCase):
 
         prompt = build_character_reply_prompt(event)
 
-        self.assertIn("If the player congratulates Azele for leveling up", prompt)
-        self.assertIn("Do not connect level-up to red irises", prompt)
-        self.assertIn("congrats, you hit level 14", prompt)
+        self.assertIn("Level-up praise means thank the player", prompt)
+        self.assertIn("not red irises, bag slots, or pack upgrades", prompt)
+        self.assertIn("congrats Azele, you leveled up", prompt)
 
     def test_azele_fallback_accepts_fort_ranik_northlands_correction(self) -> None:
         decision = fallback_rule_decision(
@@ -1892,7 +1890,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertTrue(should_use_ollama_for_event(chat_event))
         self.assertTrue(should_use_ollama_for_event(map_event))
-        self.assertTrue(should_use_ollama_for_event(snapshot_event))
+        self.assertFalse(should_use_ollama_for_event(snapshot_event))
 
     def test_ollama_generation_includes_item_drop_events(self) -> None:
         event = event_from_game_log(
@@ -2463,7 +2461,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(replies, [])
 
-    def test_ambient_snapshot_uses_ollama_generation_when_enabled(self) -> None:
+    def test_ambient_snapshot_uses_fallback_generation_when_ollama_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
         hermes_daemon.character_reply_with_ollama = lambda event, **_: hermes_daemon.HermesDecision(
             should_speak=True,
@@ -2493,7 +2491,8 @@ class HermesDaemonTests(unittest.TestCase):
         finally:
             hermes_daemon.character_reply_with_ollama = original
 
-        self.assertEqual([reply.message for reply in replies], ["Generated quiet moment. What are you watching?"])
+        self.assertEqual(len(replies), 1)
+        self.assertNotEqual(replies[0].message, "Generated quiet moment. What are you watching?")
 
     def test_ambient_snapshot_rejects_invented_purple_loot_hook(self) -> None:
         event = event_from_game_log(
@@ -2750,7 +2749,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(replies, [])
 
-    def test_ambient_heartbeat_uses_ollama_generation_when_enabled(self) -> None:
+    def test_ambient_heartbeat_uses_local_quip_even_when_ollama_enabled(self) -> None:
         now = time.time()
         world_state.persona = "Azele"
         world_state.session_id = "ambient-heartbeat-llm"
@@ -2773,7 +2772,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertIsNotNone(reply)
         assert reply is not None
-        self.assertEqual(reply.message, "Generated heartbeat line. Still with me?")
+        self.assertNotEqual(reply.message, "Generated heartbeat line. Still with me?")
         self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
 
     def test_ambient_heartbeat_ignores_unknown_persona(self) -> None:
