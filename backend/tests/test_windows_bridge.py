@@ -22,6 +22,27 @@ class _FakeSupabase:
         return _FakeTable()
 
 
+class _CountingTable:
+    def __init__(self):
+        self.inserts = []
+
+    def insert(self, payload):
+        self.inserts.append(payload)
+        return self
+
+    def execute(self):
+        return type("Response", (), {"data": []})()
+
+
+class _CountingSupabase:
+    def __init__(self):
+        self.tables = {}
+
+    def table(self, name):
+        self.tables.setdefault(name, _CountingTable())
+        return self.tables[name]
+
+
 class _FakeReplyTable:
     def __init__(self, rows=None):
         self.updated_ids = []
@@ -171,6 +192,36 @@ class WindowsBridgeTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"accepted": True})
+
+    def test_post_event_does_not_snapshot_throttle_under_attack_alerts(self) -> None:
+        client = TestClient(app)
+        fake = _CountingSupabase()
+        payload = {
+            "source": "gwtoolboxpp-playmate",
+            "persona": "A Test",
+            "client_time": "2026-06-26T12:00:00Z",
+            "event_type": "environment_alert",
+            "sender": "System",
+            "channel": "system",
+            "message": "Azele is taking hits. Health is at 94 percent after a 3 percent drop.",
+            "alert_type": "under_attack",
+            "severity": "NORMAL",
+            "map_id": 148,
+            "player_hp": 0.94,
+            "player_hp_previous": 0.97,
+            "player_hp_drop": 0.03,
+            "damage_severity": "normal",
+        }
+
+        with patch("backend.windows_bridge.app._client", return_value=fake):
+            first = client.post("/v1/playmate/events", json=payload)
+            second = client.post("/v1/playmate/events", json=payload)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json(), {"accepted": True})
+        self.assertEqual(second.json(), {"accepted": True})
+        self.assertEqual(len(fake.tables["environment_alerts"].inserts), 2)
 
     def test_post_event_rejects_unsupported_environment_alert(self) -> None:
         client = TestClient(app)

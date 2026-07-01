@@ -2915,6 +2915,31 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(event.hp_threshold_crossed, "35%")
         self.assertEqual(event.damage_severity, "critical")
 
+    def test_small_under_attack_damage_still_speaks(self) -> None:
+        replies = process_event(
+            event_from_environment_alert(
+                {
+                    "id": 88,
+                    "alert_type": "under_attack",
+                    "severity": "NORMAL",
+                    "message": "Azele is taking hits. Health is at 94 percent after a 3 percent drop.",
+                    "payload": {
+                        "player_hp": 0.94,
+                        "player_hp_previous": 0.97,
+                        "player_hp_drop": 0.03,
+                        "damage_severity": "normal",
+                    },
+                }
+            ),
+            record_id=88,
+            use_ollama=True,
+        )
+
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0].urgency, "HIGH")
+        self.assertIn("94%", replies[0].message)
+        self.assertEqual(replies[0].metadata["trigger_environment_alert_id"], 88)
+
     def test_fallback_rule_replies_to_near_death_damage(self) -> None:
         decision = fallback_rule_decision(
             event_from_environment_alert(

@@ -1379,7 +1379,7 @@ void PlaymatePlugin::MaybeQueueEnvironmentAlert()
     const bool crossed_below_20_hp = crossed_threshold(0.20f);
     const bool crossed_damage_threshold =
         crossed_below_75_hp || crossed_below_half_hp || crossed_below_35_hp || crossed_below_20_hp;
-    const bool significant_hp_drop = hp_drop >= 0.05f;
+    const bool significant_hp_drop = hp_drop >= 0.02f;
 
     if (significant_hp_drop || crossed_damage_threshold) {
         scan.player_hp_previous = last_player_hp_;
