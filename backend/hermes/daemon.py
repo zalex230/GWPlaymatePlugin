@@ -3123,9 +3123,13 @@ def generate_kokoro_audio(text: str) -> tuple[bytes, str] | None:
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=settings.kokoro_tts_timeout_seconds) as response:
-        status = getattr(response, "status", 200)
-        audio = response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=settings.kokoro_tts_timeout_seconds) as response:
+            status = getattr(response, "status", 200)
+            audio = response.read()
+    except Exception as exc:
+        print(f"Hermes Kokoro TTS request failed: {type(exc).__name__}: {exc}", flush=True)
+        return None
     if status < 200 or status >= 300 or not audio:
         return None
     return audio, _audio_mime_type(settings.kokoro_tts_format)
@@ -3161,9 +3165,13 @@ def generate_chatterbox_turbo_audio(text: str, *, expression: str) -> tuple[byte
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=settings.chatterbox_tts_timeout_seconds) as response:
-        status = getattr(response, "status", 200)
-        audio = response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=settings.chatterbox_tts_timeout_seconds) as response:
+            status = getattr(response, "status", 200)
+            audio = response.read()
+    except Exception as exc:
+        print(f"Hermes Chatterbox Turbo TTS request failed: {type(exc).__name__}: {exc}", flush=True)
+        return None
     if status < 200 or status >= 300 or not audio:
         return None
     return audio, _audio_mime_type(settings.chatterbox_tts_format)
@@ -3234,7 +3242,7 @@ def attach_tts_audio(reply: CompanionReplyInsert) -> CompanionReplyInsert:
     try:
         generated = generate_tts_audio(reply.message, expression=expression)
         if not generated:
-            return reply
+            return reply.model_copy(update={"metadata": {**reply.metadata, "tts_error": "audio_generation_unavailable"}})
         audio, mime_type, provider, voice = generated
         client = create_supabase_client(settings)
         bucket = settings.hermes_tts_storage_bucket
@@ -3266,8 +3274,10 @@ def attach_tts_audio(reply: CompanionReplyInsert) -> CompanionReplyInsert:
         }
         return reply.model_copy(update={"metadata": metadata})
     except Exception as exc:
-        print(f"Hermes TTS audio unavailable: {exc}")
-        return reply
+        print(f"Hermes TTS audio unavailable: {type(exc).__name__}: {exc}", flush=True)
+        return reply.model_copy(
+            update={"metadata": {**reply.metadata, "tts_error": f"{type(exc).__name__}: {str(exc)[:180]}"}}
+        )
 
 
 def insert_reply(reply: CompanionReplyInsert, *, consumed: bool = False) -> None:

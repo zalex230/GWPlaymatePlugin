@@ -255,6 +255,29 @@ class HermesDaemonTests(unittest.TestCase):
         finally:
             hermes_daemon.settings = original_settings
 
+    def test_tts_metadata_records_generation_failure(self) -> None:
+        original_settings = hermes_daemon.settings
+        original_generate = hermes_daemon.generate_tts_audio
+        try:
+            hermes_daemon.settings = replace(
+                original_settings,
+                hermes_tts_provider="chatterbox-turbo",
+                supabase_url="https://example.supabase.co",
+                supabase_service_key="service-key",
+            )
+            hermes_daemon.generate_tts_audio = lambda text, expression: None
+
+            reply = hermes_daemon.attach_tts_audio(
+                CompanionReplyInsert(persona="Azele", message="I know. Still nice to hear.", urgency="NORMAL")
+            )
+
+            self.assertEqual(reply.metadata["expression"], "confident")
+            self.assertEqual(reply.metadata["tts_error"], "audio_generation_unavailable")
+            self.assertNotIn("audio_url", reply.metadata)
+        finally:
+            hermes_daemon.settings = original_settings
+            hermes_daemon.generate_tts_audio = original_generate
+
     def test_split_gw_chat_lines_uses_third_line_instead_of_clipping_second(self) -> None:
         text = (
             "Ascalon City looks busy and familiar, and I missed that more than I expected. "

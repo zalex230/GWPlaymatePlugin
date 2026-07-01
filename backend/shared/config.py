@@ -73,7 +73,7 @@ class BackendSettings:
     chatterbox_tts_url: str = os.getenv("CHATTERBOX_TTS_URL", "http://127.0.0.1:4123/v1/audio/speech")
     chatterbox_tts_voice_sample: str = os.getenv("CHATTERBOX_TTS_VOICE_SAMPLE", "")
     chatterbox_tts_format: str = os.getenv("CHATTERBOX_TTS_FORMAT", "wav")
-    chatterbox_tts_timeout_seconds: float = _float_env("CHATTERBOX_TTS_TIMEOUT_SECONDS", 45.0)
+    chatterbox_tts_timeout_seconds: float = _float_env("CHATTERBOX_TTS_TIMEOUT_SECONDS", 90.0)
     chatterbox_tts_exaggeration: float = _float_env("CHATTERBOX_TTS_EXAGGERATION", 0.7)
     chatterbox_tts_temperature: float = _float_env("CHATTERBOX_TTS_TEMPERATURE", 0.8)
 
