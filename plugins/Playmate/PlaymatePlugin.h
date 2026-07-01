@@ -84,6 +84,10 @@ private:
         float player_x = 0.0f;
         float player_y = 0.0f;
         float player_hp = 0.0f;
+        float player_hp_previous = 0.0f;
+        float player_hp_drop = 0.0f;
+        std::string hp_threshold_crossed;
+        std::string damage_severity;
         uint32_t hostile_count = 0;
         uint32_t close_hostile_count = 0;
         uint32_t dead_hostile_count = 0;
@@ -144,6 +148,10 @@ private:
         float player_x = 0.0f;
         float player_y = 0.0f;
         float player_hp = 0.0f;
+        float player_hp_previous = 0.0f;
+        float player_hp_drop = 0.0f;
+        std::string hp_threshold_crossed;
+        std::string damage_severity;
         uint32_t hostile_count = 0;
         uint32_t close_hostile_count = 0;
         uint32_t dead_hostile_count = 0;
@@ -191,6 +199,7 @@ private:
     void WaitForTtsPlaybackSlot();
     void MarkTtsPlaybackStarted(const std::wstring& reply, uint32_t extra_delay_ms);
     bool ShouldPollReplies() const;
+    int ReplyPollDelayMs() const;
     void ApplyConfig();
     void SetStatus(std::string status);
 
@@ -234,8 +243,8 @@ private:
     std::atomic_bool speech_bubbles_enabled_ = true;
     std::atomic_bool tts_enabled_ = true;
     std::atomic_bool environment_radar_enabled_ = true;
-    std::atomic<int> poll_interval_ms_ = 3000;
-    float poll_interval_sec_ = 3.0f;
+    std::atomic<int> poll_interval_ms_ = 1000;
+    float poll_interval_sec_ = 1.0f;
     float snapshot_interval_sec_ = 45.0f;
     float radar_interval_sec_ = 3.0f;
     char backend_url_input_[256] = "http://127.0.0.1:8787";

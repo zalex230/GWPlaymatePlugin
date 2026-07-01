@@ -28,6 +28,10 @@ class TelemetryEvent(BaseModel):
     player_x: float = 0.0
     player_y: float = 0.0
     player_hp: float = 0.0
+    player_hp_previous: float = 0.0
+    player_hp_drop: float = 0.0
+    hp_threshold_crossed: str = ""
+    damage_severity: str = ""
     hostile_count: int = 0
     close_hostile_count: int = 0
     dead_hostile_count: int = 0
@@ -83,6 +87,10 @@ class TelemetryEvent(BaseModel):
             "player_x": self.player_x,
             "player_y": self.player_y,
             "player_hp": self.player_hp,
+            "player_hp_previous": self.player_hp_previous,
+            "player_hp_drop": self.player_hp_drop,
+            "hp_threshold_crossed": self.hp_threshold_crossed,
+            "damage_severity": self.damage_severity,
             "hostile_count": self.hostile_count,
             "close_hostile_count": self.close_hostile_count,
             "dead_hostile_count": self.dead_hostile_count,

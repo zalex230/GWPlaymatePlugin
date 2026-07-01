@@ -764,7 +764,7 @@ void PlaymatePlugin::LoadSettings(const wchar_t* folder)
         const auto computer_folder = plugin_folder.parent_path();
         local_log_folder_ = (computer_folder.empty() ? plugin_folder : computer_folder) / L"Playmate";
     }
-    poll_interval_sec_ = std::clamp(poll_interval_sec_, 1.0f, 30.0f);
+    poll_interval_sec_ = std::clamp(poll_interval_sec_, 0.25f, 30.0f);
     snapshot_interval_sec_ = std::clamp(snapshot_interval_sec_, 30.0f, 120.0f);
     radar_interval_sec_ = std::clamp(radar_interval_sec_, 2.0f, 30.0f);
     ApplyConfig();
@@ -799,7 +799,7 @@ void PlaymatePlugin::DrawSettings()
     config_changed |= ImGui::Checkbox("Enable environment radar", &environment_radar_);
     config_changed |= ImGui::InputText("Local backend URL", backend_url_input_, sizeof(backend_url_input_));
     config_changed |= ImGui::InputText("Local API token", api_token_input_, sizeof(api_token_input_), ImGuiInputTextFlags_Password);
-    config_changed |= ImGui::SliderFloat("Reply poll interval", &poll_interval_sec_, 1.0f, 30.0f, "%.0fs");
+    config_changed |= ImGui::SliderFloat("Reply poll interval", &poll_interval_sec_, 0.25f, 10.0f, "%.2fs");
     config_changed |= ImGui::SliderFloat("Snapshot interval", &snapshot_interval_sec_, 30.0f, 120.0f, "%.0fs");
     config_changed |= ImGui::SliderFloat("Radar interval", &radar_interval_sec_, 2.0f, 15.0f, "%.1fs");
     if (config_changed) {
@@ -996,8 +996,7 @@ void PlaymatePlugin::WorkerLoop()
             if (ShouldPollReplies()) {
                 PollReplies();
             }
-            const int delay_ms = ShouldPollReplies() ? poll_interval_ms_.load() : 60000;
-            next_poll = now + std::chrono::milliseconds(delay_ms);
+            next_poll = now + std::chrono::milliseconds(ReplyPollDelayMs());
         }
     }
 }
@@ -1145,6 +1144,23 @@ bool PlaymatePlugin::ShouldPollReplies() const
     return last_reply_ms_ > 0 && now - last_reply_ms_ < 15000;
 }
 
+int PlaymatePlugin::ReplyPollDelayMs() const
+{
+    if (!telemetry_enabled_.load() || !backend_enabled_.load() || !reply_injection_enabled_.load()) {
+        return 60000;
+    }
+
+    std::lock_guard lock(status_mutex_);
+    const uint64_t now = MonotonicMs();
+    if (waiting_for_reply_) {
+        return std::min(poll_interval_ms_.load(), 350);
+    }
+    if (last_reply_ms_ > 0 && now - last_reply_ms_ < 15000) {
+        return poll_interval_ms_.load();
+    }
+    return 60000;
+}
+
 void PlaymatePlugin::QueueTelemetry(std::string event_type, std::string sender, std::string channel, std::string message)
 {
     if (!telemetry_enabled_.load() || (!local_capture_enabled_.load() && !backend_enabled_.load()) || message.empty()) {
@@ -1208,6 +1224,10 @@ void PlaymatePlugin::QueueEnvironmentAlert(std::string alert_type, std::string s
     event.player_x = scan.player_x;
     event.player_y = scan.player_y;
     event.player_hp = scan.player_hp;
+    event.player_hp_previous = scan.player_hp_previous;
+    event.player_hp_drop = scan.player_hp_drop;
+    event.hp_threshold_crossed = scan.hp_threshold_crossed;
+    event.damage_severity = scan.damage_severity;
     event.hostile_count = scan.hostile_count;
     event.close_hostile_count = scan.close_hostile_count;
     event.dead_hostile_count = scan.dead_hostile_count;
@@ -1335,7 +1355,7 @@ void PlaymatePlugin::MaybeQueueEnvironmentAlert()
     if (!environment_radar_enabled_.load()) {
         return;
     }
-    const EnvironmentScan scan = BuildEnvironmentScan();
+    EnvironmentScan scan = BuildEnvironmentScan();
     if (!scan.valid) {
         last_hostile_count_ = 0;
         last_close_hostile_count_ = 0;
@@ -1350,14 +1370,51 @@ void PlaymatePlugin::MaybeQueueEnvironmentAlert()
     const bool combat_ended = !scan.in_combat && last_in_combat_ && scan.hostile_count == 0;
     const bool has_hp_baseline = last_player_hp_ > 0.0f;
     const float hp_drop = has_hp_baseline ? last_player_hp_ - scan.player_hp : 0.0f;
-    const bool significant_hp_drop = hp_drop >= 0.08f;
-    const bool crossed_below_half_hp = has_hp_baseline && last_player_hp_ >= 0.50f && scan.player_hp < 0.50f;
+    const auto crossed_threshold = [&](const float threshold) {
+        return has_hp_baseline && last_player_hp_ >= threshold && scan.player_hp < threshold;
+    };
+    const bool crossed_below_75_hp = crossed_threshold(0.75f);
+    const bool crossed_below_half_hp = crossed_threshold(0.50f);
+    const bool crossed_below_35_hp = crossed_threshold(0.35f);
+    const bool crossed_below_20_hp = crossed_threshold(0.20f);
+    const bool crossed_damage_threshold =
+        crossed_below_75_hp || crossed_below_half_hp || crossed_below_35_hp || crossed_below_20_hp;
+    const bool significant_hp_drop = hp_drop >= 0.05f;
 
-    if (significant_hp_drop || crossed_below_half_hp) {
+    if (significant_hp_drop || crossed_damage_threshold) {
+        scan.player_hp_previous = last_player_hp_;
+        scan.player_hp_drop = std::max(0.0f, hp_drop);
+        if (crossed_below_20_hp) {
+            scan.hp_threshold_crossed = "20%";
+        }
+        else if (crossed_below_35_hp) {
+            scan.hp_threshold_crossed = "35%";
+        }
+        else if (crossed_below_half_hp) {
+            scan.hp_threshold_crossed = "50%";
+        }
+        else if (crossed_below_75_hp) {
+            scan.hp_threshold_crossed = "75%";
+        }
+        if (scan.player_hp < 0.20f || crossed_below_20_hp) {
+            scan.damage_severity = "near_death";
+        }
+        else if (scan.player_hp < 0.35f || crossed_below_35_hp) {
+            scan.damage_severity = "critical";
+        }
+        else if (hp_drop >= 0.12f || crossed_below_half_hp) {
+            scan.damage_severity = "heavy";
+        }
+        else {
+            scan.damage_severity = "normal";
+        }
         QueueEnvironmentAlert(
             "under_attack",
-            (crossed_below_half_hp || scan.player_hp < 0.35f) ? "HIGH" : "NORMAL",
-            std::format("Azele is taking hits. Health is at {:.0f} percent.", scan.player_hp * 100.0f),
+            (crossed_below_half_hp || scan.player_hp < 0.35f || hp_drop >= 0.12f) ? "HIGH" : "NORMAL",
+            std::format(
+                "Azele is taking hits. Health is at {:.0f} percent after a {:.0f} percent drop.",
+                scan.player_hp * 100.0f,
+                scan.player_hp_drop * 100.0f),
             scan);
     }
     else if (danger_spike) {
@@ -1608,7 +1665,7 @@ void PlaymatePlugin::ShowCompanionSpeechBubble(const std::wstring& reply) const
 
 void PlaymatePlugin::ApplyConfig()
 {
-    poll_interval_sec_ = std::clamp(poll_interval_sec_, 1.0f, 30.0f);
+    poll_interval_sec_ = std::clamp(poll_interval_sec_, 0.25f, 30.0f);
     snapshot_interval_sec_ = std::clamp(snapshot_interval_sec_, 30.0f, 120.0f);
     telemetry_enabled_.store(enabled_);
     local_capture_enabled_.store(local_capture_);

@@ -32,6 +32,7 @@ from backend.shared.models import (
 )
 from backend.shared.state import LiveWorldState
 from backend.shared.supabase_client import create_supabase_client, require_supabase_settings
+from backend.hermes.gw1_knowledge import ResolvedGameContext, resolve_gw1_context
 
 
 settings = load_settings()
@@ -47,8 +48,8 @@ recent_reply_texts: deque[str] = deque(maxlen=12)
 map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
 MAX_GW_REPLY_LINES = 3
-MULTI_MESSAGE_MIN_REPLY_DELAY_MS = 4200
-MULTI_MESSAGE_MAX_REPLY_DELAY_MS = 12000
+MULTI_MESSAGE_MIN_REPLY_DELAY_MS = 3200
+MULTI_MESSAGE_MAX_REPLY_DELAY_MS = 9000
 VISIBLE_ENEMY_RANGE = 900.0
 AMBIENT_QUIP_MIN_SECONDS = 85.0
 AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 120.0
@@ -257,6 +258,10 @@ def event_from_game_log(record: dict[str, Any]) -> TelemetryEvent:
         player_x=metadata.get("player_x", record.get("player_x") or 0),
         player_y=metadata.get("player_y", record.get("player_y") or 0),
         player_hp=metadata.get("player_hp", 0),
+        player_hp_previous=metadata.get("player_hp_previous", 0),
+        player_hp_drop=metadata.get("player_hp_drop", 0),
+        hp_threshold_crossed=metadata.get("hp_threshold_crossed", ""),
+        damage_severity=metadata.get("damage_severity", ""),
         hostile_count=metadata.get("hostile_count", 0),
         close_hostile_count=metadata.get("close_hostile_count", 0),
         dead_hostile_count=metadata.get("dead_hostile_count", 0),
@@ -298,6 +303,10 @@ def event_from_environment_alert(record: dict[str, Any]) -> TelemetryEvent:
         player_x=metadata.get("player_x", record.get("player_x") or 0),
         player_y=metadata.get("player_y", record.get("player_y") or 0),
         player_hp=metadata.get("player_hp", 0),
+        player_hp_previous=metadata.get("player_hp_previous", 0),
+        player_hp_drop=metadata.get("player_hp_drop", 0),
+        hp_threshold_crossed=metadata.get("hp_threshold_crossed", ""),
+        damage_severity=metadata.get("damage_severity", ""),
         hostile_count=metadata.get("hostile_count", 0),
         close_hostile_count=metadata.get("close_hostile_count", 0),
         dead_hostile_count=metadata.get("dead_hostile_count", 0),
@@ -1079,9 +1088,25 @@ def compact_live_facts(event: TelemetryEvent) -> str:
     ]
     if event.player_hp:
         facts.append(f"player_hp={event.player_hp:.0%}")
+    if getattr(event, "player_hp_drop", 0):
+        facts.append(f"hp_drop={event.player_hp_drop:.0%}")
+    if getattr(event, "hp_threshold_crossed", ""):
+        facts.append(f"hp_threshold_crossed={event.hp_threshold_crossed}")
     if event.closest_hostile_distance:
         facts.append(f"closest_hostile_distance={event.closest_hostile_distance:.0f}")
     return ", ".join(facts)
+
+
+def gw1_context_hint(event: TelemetryEvent) -> str:
+    context = resolve_gw1_context(event, recent_conversation_context(limit=6))
+    if not context.matched:
+        return ""
+    anchors = ", ".join(context.response_anchors)
+    return (
+        f"Resolved GW1 context: {context.canonical_topic} "
+        f"(intent={context.intent}, era={context.era_scope}, confidence={context.confidence:.2f}). "
+        f"Use these anchors if relevant: {anchors}."
+    )
 
 
 def map_lore_hint(event: TelemetryEvent) -> str:
@@ -1476,6 +1501,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"Task: {task}\n\n"
         f"{context_block}\n"
         f"Reliable live facts: {compact_live_facts(event)}\n\n"
+        f"{gw1_context_hint(event)}\n\n"
         f"Recent conversation transcript:\n{recent_conversation_context()}\n\n"
         f"Recent Azele replies:\n{recent_companion_context()}\n\n"
         f"Recent live context:\n{world_state.prompt_context()}\n"
@@ -1725,13 +1751,16 @@ def estimate_reply_delay_ms(text: str) -> int:
         return MULTI_MESSAGE_MIN_REPLY_DELAY_MS
     visible_chars = len(re.sub(r"\s+", "", cleaned))
     word_count = max(1, len(cleaned.split()))
-    estimated = max(visible_chars * 70, word_count * 390) + 1800
+    estimated = max(visible_chars * 55, word_count * 310) + 900
     return int(max(MULTI_MESSAGE_MIN_REPLY_DELAY_MS, min(MULTI_MESSAGE_MAX_REPLY_DELAY_MS, estimated)))
 
 
 def model_reply_has_bad_shape(reply: str) -> bool:
     cleaned = re.sub(r"\s+", " ", reply).strip()
     if not cleaned:
+        return True
+    words = re.findall(r"[A-Za-z0-9']+", cleaned)
+    if len(words) < 2:
         return True
     if DANGLING_REPLY_ENDING_PATTERN.search(cleaned.rstrip(" .!?")):
         return True
@@ -1850,7 +1879,7 @@ def should_speak_for_environment_alert(event: TelemetryEvent) -> bool:
     if event.alert_type not in SPEAKING_ENVIRONMENT_ALERT_TYPES:
         return False
     if event.alert_type == "under_attack":
-        return event.player_hp > 0
+        return event.player_hp > 0 or getattr(event, "player_hp_drop", 0) > 0
     if event.alert_type == "combat_started":
         return bool((event.agent_id or readable_game_text(event.agent_name)) and has_visible_enemy_context(event))
     if event.alert_type == "danger_spike":
@@ -2043,6 +2072,14 @@ def azele_clarification_reply(message: str) -> str | None:
     previous_lower = previous.lower()
     if not previous:
         return None
+    if re.search(r"\b(?:odd|weird|strange|off|wrong|not coherent|made no sense|didn'?t make sense)\b", message):
+        return first_fresh_reply(
+            [
+                "Yeah, that was odd. I misread you. I’m alright, just a little restless.",
+                "You’re right, that came out wrong. I meant I’m here with you, not trying to dodge you.",
+                "Yeah, fair. That was me answering sideways. I’m good; I just lost the thread for a second.",
+            ]
+        )
     if re.search(r"\bwhat\s+(?:rumou?rs?|stories|signs|whispers?)\b", message):
         if re.search(r"\brumou?rs?\b", previous_lower):
             return first_fresh_reply(
@@ -2114,6 +2151,8 @@ def azele_contextual_followup_reply(message: str) -> str | None:
 
     previous_lower = previous.lower()
     message_lower = message.lower()
+    if re.search(r"\b(?:what are we doing|what'?s up|what’s up|i'?m listening|i’m listening|yeah,? i'?m here|yeah,? i’m here)\b", previous_lower):
+        return None
     yesish = bool(re.fullmatch(r"\s*(?:yes|yeah|yep|sure|i think so)[.!?,\s]*", message_lower))
     noish = bool(re.fullmatch(r"\s*(?:no|nope|nah)[.!?,\s]*", message_lower))
 
@@ -2207,8 +2246,10 @@ def is_player_checkin(message: str) -> bool:
     lowered = re.sub(r"\s+", " ", readable_game_text(message).lower()).strip()
     return bool(
         re.search(r"\bhow\s+(?:are|r)\s+(?:you|u)\b", lowered)
+        or re.search(r"\bhow'?s\s+it\s+going\b|\bhow\s+is\s+it\s+going\b|\bhow\s+you\s+doing\b|\bhow\s+are\s+things\b", lowered)
         or re.search(r"\b(?:i'?m|im|i am)\s+feeling\b", lowered)
         or re.search(r"\b(?:you good|you ok|you okay|are you ok|are you okay|u ok)\b", lowered)
+        or re.search(r"\b(?:you hear me|hear me|are you there|you there|still there)\b", lowered)
     )
 
 
@@ -2216,6 +2257,9 @@ def azele_player_checkin_reply(message: str) -> str:
     lowered = readable_game_text(message).lower()
     player_feels_good = bool(re.search(r"\b(?:feeling|feel)\s+(?:good|great|better|fine|okay|ok)\b", lowered))
     asks_azele = bool(re.search(r"\bhow\s+(?:are|r)\s+(?:you|u)\b", lowered))
+    asks_how_it_is_going = bool(
+        re.search(r"\bhow'?s\s+it\s+going\b|\bhow\s+is\s+it\s+going\b|\bhow\s+you\s+doing\b|\bhow\s+are\s+things\b", lowered)
+    )
     if player_feels_good and asks_azele:
         return first_fresh_reply(
             [
@@ -2230,6 +2274,22 @@ def azele_player_checkin_reply(message: str) -> str:
                 "I’m alright. A little wound up, but still with you.",
                 "I’m good enough. Tell me where your head is at.",
                 "Still here. Still sharp. How are you doing?",
+            ]
+        )
+    if asks_how_it_is_going:
+        return first_fresh_reply(
+            [
+                "It’s going alright. I’m a little restless, but I’m here.",
+                "Good enough. I’m watching the room and pretending I’m patient.",
+                "Alright so far. I’m with you; just tell me where we’re going next.",
+            ]
+        )
+    if re.search(r"\b(?:you hear me|hear me|are you there|you there|still there)\b", lowered):
+        return first_fresh_reply(
+            [
+                "Yeah, I hear you. I’m here.",
+                "I hear you. What do you need?",
+                "Still here. Go on.",
             ]
         )
     if player_feels_good:
@@ -2257,11 +2317,48 @@ def is_skirt_outfit_question(message: str) -> bool:
 
 
 def is_azele_wearable_context(message: str) -> bool:
-    if re.search(r"\b(my|mine|i am|i'm)\b.*\b(boots?|skirts?|leggings?|armor|armour|outfit|gear|fit)\b", message):
+    if re.search(
+        r"\b(my|mine|i am|i'm)\b.*\b(boots?|skirts?|leggings?|armor|armour|outfit|gear|fit|dress(?:es)?|clothes|clothing)\b",
+        message,
+    ):
         return False
-    wearable = r"\b(mini\s*skirts?|skirts?|leggings?|krytan|boots?|armor|armour|outfit|gear|fit)\b"
+    wearable = (
+        r"\b(mini\s*skirts?|skirts?|leggings?|krytan|boots?|armor|armour|outfit|gear|fit|"
+        r"dress(?:es)?|clothes|clothing|style|dressed)\b"
+    )
     azele_anchor = r"\b(you|your|her|azele|swap|wear|wearing|prefer|look|looks|aesthetic|upgrade|collector|collecting)\b"
     return bool(re.search(wearable, message) and re.search(azele_anchor, message))
+
+
+def is_azele_style_tease_context(message: str) -> bool:
+    if re.search(r"\b(my|mine|i am|i'm)\b.*\b(style|dress(?:es)?|outfit|clothes|clothing|wearing|dressed)\b", message):
+        return False
+    style_words = r"\b(style|dress(?:es)?|outfit|clothes|clothing|wearing|dressed|looks?)\b"
+    azele_anchor = r"\b(you|your|azele|by the way you dress|how you dress)\b"
+    tease_words = r"\b(clearly|obviously|like|know|noticed|fit|good|pretty|cute|hot|dress)\b"
+    return bool(
+        re.search(style_words, message)
+        and re.search(azele_anchor, message)
+        and re.search(tease_words, message)
+    )
+
+
+def azele_style_tease_reply(message: str) -> str:
+    if re.search(r"\b(clearly|obviously)\b", message):
+        return first_fresh_reply(
+            [
+                "Clearly? Rude. Accurate, but rude. I like looking good.",
+                "Obviously I like style. I just appreciate that you noticed.",
+                "Yes, clearly. If we are going to be in danger, I am still dressing like I meant to be seen.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "I do like style. Looking good and staying alive can both matter.",
+            "You noticed. Good. I put effort into this, obviously.",
+            "I like looking good. It is not my fault people keep noticing.",
+        ]
+    )
 
 
 def misdirects_wearable_to_player(reply: str) -> bool:
@@ -2454,6 +2551,14 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return not re.search(r"\b(?:thank|thanks|level|14|fourteen|made it|finally|stronger|ready|charr|northlands|wall|with you)\b", reply, re.IGNORECASE)
     if is_level_charr_context(message):
         return not re.search(r"\b(?:charr|ascalon|wall|northlands|level|fourteen|14|ready|with you)\b", reply, re.IGNORECASE)
+    if is_scourge_lfg_context(message):
+        return not re.search(r"\b(?:scourge|lfg|listing|description|repost|party)\b", reply, re.IGNORECASE)
+    if is_scourge_beneath_run_context(message, event):
+        return not re.search(r"\b(?:scourge|beneath|below|maz|scourgeheart|forsaken|devona|elemental|ascalon)\b", reply, re.IGNORECASE)
+    if is_tunnel_plan_context(message):
+        return not re.search(r"\b(?:tunnel|catacomb|scourge|careful|pull|bail|reset|regroup)\b", reply, re.IGNORECASE)
+    if is_pet_evolution_context(message):
+        return not re.search(r"\b(?:pet|dire|hearty|evol|develop|level\s*11|level|sturdy|harder)\b", reply, re.IGNORECASE)
     if is_devona_pet_context(message):
         return not re.search(r"\b(?:devona|pet|ranger|stalker|melandru|warthog|animal)\b", reply, re.IGNORECASE)
     if is_red_iris_bag_context(message):
@@ -2486,7 +2591,7 @@ def azele_charr_intent_reply(event: TelemetryEvent) -> str | None:
         return "We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second."
     if CHARR_ACTION_PATTERN.search(message):
         if re.search(r"\blevel\s*(?:14|fourteen|up|ing)?\b", message, re.IGNORECASE):
-            return "Level 14, then Charr past the gate. Good. I’m with you."
+            return "Level 14, then Charr past the gate. Good. We defend Ascalon."
         if has_visible_enemy_context(event):
             return "Yes. Charr threaten Ascalon. Stay close and hit hard."
         return "Yes. Charr threaten Ascalon. We prepare, then go past the Wall."
@@ -2500,6 +2605,139 @@ def is_alcohol_consumable_context(message: str) -> bool:
     return bool(
         re.search(r"\b(?:drink|drank|made\s+you\s+drink)\b", lowered)
         and re.search(r"\b(?:15|fifteen|dwarven|ale)\b", lowered)
+    )
+
+
+def is_ldoa_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    return bool(
+        re.search(r"\b(?:ldoa|legendary defender|defender of ascalon|level\s*20|lvl\s*20)\b", lowered)
+        or (
+            re.search(r"\bpre[-\s]?searing\b", lowered)
+            and re.search(r"\b(?:ascalon|aware|stuff|knowledge|know|grind|title|level|vanguard|langmar)\b", lowered)
+        )
+        or (
+            re.search(r"\b(?:langmar|vanguard dail(?:y|ies)|death leveling|forsaken tunnels|scourge beneath)\b", lowered)
+            and re.search(r"\b(?:ascalon|pre|ldoa|level|title|grind|defender)\b", lowered)
+        )
+    )
+
+
+def is_scourge_lfg_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    return bool(
+        re.search(r"\b(?:lfg|party\s+search|party\s+description|description|repost|post)\b", lowered)
+        and re.search(r"\b(?:scourge|a\s+scourge\s+beneath|blank|merged|listing)\b", lowered)
+    )
+
+
+def azele_scourge_lfg_reply(message: str) -> str:
+    return first_fresh_reply(
+        [
+            "Yeah, repost it with Scourge named cleanly. A blank merged listing is just asking people to ignore it.",
+            "Good catch. Put Scourge in the LFG line by itself so it does not look broken.",
+            "Right, that listing reads wrong. Repost it with Scourge clear in the description.",
+        ]
+    )
+
+
+def is_scourge_beneath_run_context(message: str, event: TelemetryEvent | None = None) -> bool:
+    lowered = readable_game_text(message).lower()
+    if re.search(r"\b(?:the\s+)?scourge\s+(?:beneath|below)\b|\bmaz\s+scourgeheart\b", lowered):
+        return True
+    if not re.search(r"\b(?:another\s+)?tunnel\s+run\b|\brun\s+(?:the\s+)?tunnels?\b|\btunnels?\s+again\b", lowered):
+        return False
+    if event is None:
+        return False
+    map_name = map_area_label(event).lower()
+    return bool(
+        event.active_quest_id == 1456
+        or event.map_id == 779
+        or "piken square" in map_name
+        or "forsaken tunnels" in map_name
+    )
+
+
+def azele_scourge_beneath_reply(message: str) -> str:
+    return first_fresh_reply(
+        [
+            "Another Scourge Beneath run? Yeah. Maz Scourgeheart is not getting time to build that elemental army.",
+            "For Scourge Beneath? I’m in. Forsaken Tunnels again, but careful pulls this time.",
+            "Yeah, another run. Devona wants Maz Scourgeheart stopped, and honestly so do I.",
+        ]
+    )
+
+
+def is_tunnel_plan_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    return bool(re.search(r"\b(?:tunnels?|catacombs|forsaken tunnels|scourge beneath)\b", lowered))
+
+
+def is_recent_failure_bailout_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    return bool(
+        re.search(r"\b(?:didn'?t work|did not work|not work out|work out|bail(?:ed)?|back out|had to leave|wipe(?:d)?)\b", lowered)
+        and re.search(r"\b(?:that|it|we|us|out)\b", lowered)
+    )
+
+
+def azele_tunnel_plan_reply(message: str) -> str:
+    lowered = readable_game_text(message).lower()
+    if is_recent_failure_bailout_context(lowered) or re.search(r"\b(?:bail|didn'?t work|did not work|not work|failed|rough|bad|wipe|wiped)\b", lowered):
+        return first_fresh_reply(
+            [
+                "Yeah, that got ugly fast. Back out, reset, then we try smarter.",
+                "Agreed. That was not worth forcing. We regroup and go in cleaner next time.",
+                "Fine, we bail. I like winning more than pretending a bad push is heroic.",
+            ]
+        )
+    if re.search(r"\b(?:solo|alone|by ourselves|just us)\b", lowered):
+        return first_fresh_reply(
+            [
+                "Solo tunnels is risky, but I’m game if we pull carefully.",
+                "Just us in the tunnels? Fine, but we do this slowly and do not get surrounded.",
+                "We can try it solo. You pull, I watch the messy edges.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "Alright, tunnels then. Keep it tight and do not let them wrap around us.",
+            "Tunnels it is. I’ll stay sharp; you pick the first pull.",
+            "Okay. Into the tunnels, but carefully. I do not want a stupid death down there.",
+        ]
+    )
+
+
+def is_pet_evolution_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    return bool(
+        re.search(r"\b(?:pet|animal|stalker|warthog|wolf|bear)\b", lowered)
+        and re.search(r"\b(?:dire|hearty|elder|develop|evolve|evolution|level)\b", lowered)
+    )
+
+
+def azele_pet_evolution_reply(message: str) -> str:
+    return first_fresh_reply(
+        [
+            "Pet evolution is around level 11, depending how it fights. Dire hits harder; Hearty gets sturdier.",
+            "Usually level 11 is when that starts showing. If we want Dire, let it do more of the killing.",
+            "Around level 11. Hearty means tougher, Dire means meaner. Depends how we raise it.",
+        ]
+    )
+
+
+def azele_ldoa_reply(message: str) -> str:
+    if re.search(r"\b(?:aware|know|knowledge|stuff|context)\b", message, re.IGNORECASE):
+        return (
+            "Yes. I know the shape of it better now: stay in Ascalon, build toward level 20, "
+            "use Langmar dailies, and be careful with quest rewards if we are optimizing."
+        )
+    return first_fresh_reply(
+        [
+            "For LDoA in pre, we pace it: skills, useful gear, Langmar dailies, then level 20.",
+            "Defender is the long Ascalon plan. We do not leave, we build carefully, and we use Vanguard work when it matters.",
+            "If we are serious about Defender, I am with you. We plan rewards, watch the Northlands, and do not waste the grind.",
+        ]
     )
 
 
@@ -2560,7 +2798,99 @@ def azele_item_drop_reply(event: TelemetryEvent) -> str:
     )
 
 
-def ollama_generate_visible(prompt: str) -> str:
+def azele_gw1_context_reply(context: ResolvedGameContext, event: TelemetryEvent) -> str | None:
+    if not context.matched:
+        return None
+    message = readable_game_text(event.message).lower()
+    if context.entry_id == "quest.scourge_beneath":
+        return azele_scourge_beneath_reply(message)
+    if context.entry_id == "title.ldoa":
+        return azele_ldoa_reply(message)
+    if context.entry_id == "enemy.charr" and "charr" in message:
+        return azele_charr_intent_reply(event) or "Charr threaten Ascalon. We get ready, then we hit them hard."
+    if context.entry_id == "loot.black_dye":
+        source_name = readable_game_text(getattr(event, "agent_name", ""))
+        if source_name:
+            return f"Black Dye? In pre-Searing? That is ridiculous luck. Looked like it came from {source_name}."
+        return "Black Dye in pre-Searing is huge. I did not see what dropped it, though."
+    if context.entry_id == "loot.purple":
+        return first_fresh_reply(
+            [
+                "Purple out here? That is worth checking. What did it roll?",
+                "A purple in pre is actually exciting. Show me what it is.",
+                "Purple? Good. Pick it up before I start staring at it.",
+            ]
+        )
+    if context.entry_id == "item.red_iris":
+        return first_fresh_reply(
+            [
+                "Red iris for bag space, right? Worth the little detour.",
+                "A flower errand for more room is still practical. Lead on.",
+                "Yeah, red irises. Pretty and useful, which I appreciate.",
+            ]
+        )
+    if context.entry_id == "gear.krytan_leggings":
+        return first_fresh_reply(
+            [
+                "Krytan leggings are an upgrade and a style change. I know, complicated.",
+                "Better protection with the longer skirt? Fine. Practical can still look good.",
+                "If the Krytan leggings are better, I’ll wear them. I may complain about the skirt length.",
+            ]
+        )
+    if context.entry_id == "npc.devona_pet":
+        return azele_devona_pet_reply(message)
+    return None
+
+
+def azele_under_attack_reply(event: TelemetryEvent) -> str:
+    hp = float(getattr(event, "player_hp", 0) or 0)
+    hp_drop = float(getattr(event, "player_hp_drop", 0) or 0)
+    threshold = readable_game_text(getattr(event, "hp_threshold_crossed", ""))
+    severity = readable_game_text(getattr(event, "damage_severity", "")).lower()
+    hp_text = f"{hp:.0%}" if hp else "low"
+
+    if hp and hp <= 0.20:
+        return first_fresh_reply(
+            [
+                f"I’m nearly down. {hp_text}. Get them off me.",
+                f"{hp_text}. I need cover now.",
+                f"Too low. {hp_text}. Help me finish this.",
+            ]
+        )
+    if hp and (hp <= 0.35 or severity == "critical" or threshold in {"35", "35%", "20", "20%"}):
+        return first_fresh_reply(
+            [
+                f"I’m hurting. {hp_text}. Stay on them.",
+                f"{hp_text}. I need a little room.",
+                f"That hit hurt. {hp_text}. Cover me.",
+            ]
+        )
+    if hp_drop >= 0.12 or severity == "heavy":
+        return first_fresh_reply(
+            [
+                f"Ow. Big hit. {hp_text}.",
+                f"That one landed. {hp_text}. Keep pressure on.",
+                f"I felt that. {hp_text}.",
+            ]
+        )
+    if hp:
+        return first_fresh_reply(
+            [
+                f"Ow. {hp_text}. I’m hit, but still up.",
+                f"Taking hits. {hp_text}. Stay close.",
+                f"I’m getting clipped. {hp_text}. Cover me.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "Ow. I’m getting hit. Help me out.",
+            "I’m taking hits here.",
+            "Need a hand. I’m getting hit.",
+        ]
+    )
+
+
+def ollama_generate_visible(prompt: str, *, timeout_seconds: float | None = None) -> str:
     url = settings.ollama_host.rstrip("/") + "/api/generate"
     payload = {
         "model": settings.ollama_model,
@@ -2583,7 +2913,8 @@ def ollama_generate_visible(prompt: str) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=settings.ollama_timeout_seconds) as response:
+    timeout = settings.ollama_timeout_seconds if timeout_seconds is None or timeout_seconds <= 0 else timeout_seconds
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         data = json.loads(response.read().decode("utf-8"))
     return str(data.get("response") or "")
 
@@ -2633,9 +2964,9 @@ def repair_model_reply(reply: str) -> str:
     return cleaned.strip()
 
 
-def character_reply_with_ollama(event: TelemetryEvent) -> HermesDecision:
+def character_reply_with_ollama(event: TelemetryEvent, *, timeout_seconds: float | None = None) -> HermesDecision:
     started_at = time.perf_counter()
-    response = ollama_generate_visible(build_character_reply_prompt(event))
+    response = ollama_generate_visible(build_character_reply_prompt(event), timeout_seconds=timeout_seconds)
     elapsed = time.perf_counter() - started_at
     print(
         f"Ollama character reply generated in {elapsed:.2f}s "
@@ -2659,6 +2990,11 @@ def character_reply_with_ollama(event: TelemetryEvent) -> HermesDecision:
 
 def decide_with_ollama(event: TelemetryEvent) -> HermesDecision:
     if should_use_direct_character_reply(event):
+        if event.event_type == "player_chat" and event.channel == "party":
+            return character_reply_with_ollama(
+                event,
+                timeout_seconds=settings.hermes_player_chat_ollama_timeout_seconds,
+            )
         return character_reply_with_ollama(event)
 
     import ollama
@@ -2725,16 +3061,7 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
         if not should_speak_for_environment_alert(event):
             return HermesDecision(should_speak=False)
         if event.alert_type == "under_attack":
-            if event.player_hp:
-                response = f"Ow. {event.player_hp:.0%} health. Help me out."
-            else:
-                response = first_fresh_reply(
-                    [
-                        "Ow. I’m getting hit. Help me out.",
-                        "I’m taking hits here.",
-                        "Need a hand. I’m getting hit.",
-                    ]
-                )
+            response = azele_under_attack_reply(event)
             return HermesDecision(
                 should_speak=True,
                 channel_override="CHANNEL_PARTY",
@@ -2803,12 +3130,26 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
 def azele_fast_reply(event: TelemetryEvent) -> str:
     if charr_reply := azele_charr_intent_reply(event):
         return charr_reply
+    if gw1_reply := azele_gw1_context_reply(resolve_gw1_context(event, recent_conversation_context(limit=6)), event):
+        return gw1_reply
     message = (event.message or "").lower()
     quest = readable_game_text(event.active_quest_name)
     if is_player_checkin(message):
         return azele_player_checkin_reply(message)
     if clarification := azele_clarification_reply(message):
         return clarification
+    if is_scourge_lfg_context(message):
+        return azele_scourge_lfg_reply(message)
+    if is_scourge_beneath_run_context(message, event):
+        return azele_scourge_beneath_reply(message)
+    if is_pet_evolution_context(message):
+        return azele_pet_evolution_reply(message)
+    if is_recent_failure_bailout_context(message):
+        return azele_tunnel_plan_reply(message)
+    if is_tunnel_plan_context(message):
+        return azele_tunnel_plan_reply(message)
+    if is_ldoa_context(message):
+        return azele_ldoa_reply(message)
     if contextual_followup := azele_contextual_followup_reply(message):
         return contextual_followup
     if is_alcohol_consumable_context(message):
@@ -2848,7 +3189,7 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
     if is_level_charr_context(message):
         return first_fresh_reply(
             [
-                "Level 14, then Charr past the gate. Good. I’m with you.",
+                "Level 14, then Charr past the gate. Good. We defend Ascalon.",
                 "Yes. Get me to 14, then we make the Charr regret coming near Ascalon.",
                 "That makes sense. One more push, then we head past the Wall together.",
             ]
@@ -2885,6 +3226,14 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "Yeah. Ignore that one, it came out wrong.",
             ]
         )
+    if re.search(r"\b(locked and loaded|ready with that|had that ready|had to.*loaded|loaded,? didn't you)\b", message):
+        return first_fresh_reply(
+            [
+                "Maybe. I like being ready before you make it sound like a dare.",
+                "A little. You left the opening right there.",
+                "Yes, and you walked straight into it. That one is on you.",
+            ]
+        )
     if "of course" in message or "obviously" in message:
         return first_fresh_reply(
             [
@@ -2917,6 +3266,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "You noticed. Good, keep doing that.",
             ]
         )
+    if is_azele_style_tease_context(message):
+        return azele_style_tease_reply(message)
     if is_skirt_outfit_question(message):
         if re.search(r"\b(prefer|which|long or short|short or long)\b", message):
             return first_fresh_reply(
@@ -3022,7 +3373,7 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
                 "Go on. I’m right behind you.",
             ]
         )
-    if "thanks" in message or "ty" in message:
+    if re.search(r"\b(?:thanks|thank you|ty)\b", message):
         return first_fresh_reply(
             [
                 "You’re welcome. Try not to sound too shocked.",

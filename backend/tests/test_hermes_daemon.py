@@ -52,6 +52,8 @@ from backend.hermes_daemon.daemon import (
     validate_model_reply,
     world_state,
 )
+from backend.hermes.gw1_knowledge import resolve_gw1_context
+from backend.hermes_eval.run_eval import run_eval
 
 
 class HermesDaemonTests(unittest.TestCase):
@@ -650,6 +652,187 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex(reply.response.lower(), r"ranik|stand|inspected|parade|drilled")
         self.assertNotIn("what are we doing", reply.response.lower())
 
+    def test_fallback_answers_ldoa_strategy_when_model_fails(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "alright. are you more aware of pre-searing ascalon stuff now? for LDoA?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response, r"LDoA|level 20|Langmar|quest rewards")
+        self.assertNotIn("one more detail", reply.response.lower())
+
+    def test_fallback_handles_scourge_lfg_repost_context(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "i think you need to repost LFG with scourge. right now its merged into your party with a blank description",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"scourge|lfg|listing|description|repost")
+        self.assertNotIn("what's up", reply.response.lower())
+        self.assertNotIn("what’s up", reply.response.lower())
+
+    def test_fallback_handles_tunnel_plan(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "lets head into the tunnels",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"tunnels|pull|careful|sharp")
+        self.assertNotIn("what's up", reply.response.lower())
+        self.assertNotIn("what’s up", reply.response.lower())
+
+    def test_fallback_maps_another_tunnel_run_to_scourge_beneath(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "wanna do another tunnel run?",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 779,
+                    "map_name": "Piken Square",
+                    "active_quest_id": 1456,
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"scourge|beneath|maz|scourgeheart|forsaken|devona|elemental")
+        self.assertNotEqual(reply.response, "Alright, tunnels then. Keep it tight and do not let them wrap around us.")
+
+    def test_gw1_resolver_maps_tunnel_run_to_scourge_beneath(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "wanna do another tunnel run?",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 779,
+                    "map_name": "Piken Square",
+                    "active_quest_id": 1456,
+                },
+            }
+        )
+
+        context = resolve_gw1_context(event)
+
+        self.assertEqual(context.intent, "quest")
+        self.assertEqual(context.canonical_topic, "The Scourge Beneath")
+        self.assertGreaterEqual(context.confidence, 0.9)
+
+    def test_gw1_resolver_understands_common_pre_searing_slang(self) -> None:
+        cases = [
+            ("what's the LDoA plan?", "Legendary Defender of Ascalon"),
+            ("black dye just dropped", "Black Dye"),
+            ("ooo a pruple thing", "Purple rarity loot"),
+            ("Krytan leggings are a longer skirt upgrade", "Krytan Leggings"),
+            ("what pet should we get Devona?", "Devona pet choice"),
+        ]
+        for message, topic in cases:
+            with self.subTest(message=message):
+                context = resolve_gw1_context(
+                    event_from_game_log(
+                        {
+                            "sender": "Player",
+                            "channel": "party",
+                            "message": message,
+                            "payload": {"event_type": "player_chat", "persona": "Azele", "map_name": "Ascalon City"},
+                        }
+                    )
+                )
+                self.assertEqual(context.canonical_topic, topic)
+
+    def test_fallback_handles_tunnel_bailout(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "well that didnt work out so well. we had to bail out of that",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"ugly|reset|regroup|bail|smarter")
+        self.assertNotIn("okay. keep going", reply.response.lower())
+
+    def test_fallback_answers_pet_evolution_question(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "at what level does the pet develop dire or hearty",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"level|11|dire|hearty|pet")
+        self.assertNotIn("what are we doing", reply.response.lower())
+
+    def test_fallback_treats_hows_it_going_as_checkin(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hows it going",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"going|alright|good|restless|watching|with you")
+        self.assertNotIn("what are we doing", reply.response.lower())
+
+    def test_fallback_acknowledges_odd_previous_generic_response(self) -> None:
+        recent_reply_texts.append("Yeah, I’m here. What are we doing?")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "ok. that was an odd response, no?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"odd|wrong|misread|sideways|lost the thread")
+        self.assertNotIn("i was following up on this", reply.response.lower())
+
     def test_fallback_checkin_prioritizes_current_player_message(self) -> None:
         recent_reply_texts.append("Ranik has that soldier-stiff feeling again. Do you think they practice that?")
         event = event_from_game_log(
@@ -747,6 +930,40 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(reply.should_speak)
         self.assertRegex(reply.response.lower(), r"short|mini|longer|skirt")
         self.assertNotIn("point me at", reply.response.lower())
+
+    def test_fallback_handles_style_tease_about_how_she_dresses(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "i mean, i know you like style, clearly, by the way you dress :)",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"style|looking good|dressing|noticed")
+        self.assertNotIn("you're welcome", reply.response.lower())
+        self.assertNotIn("you’re welcome", reply.response.lower())
+        self.assertNotIn("one more detail", reply.response.lower())
+
+    def test_fallback_thanks_does_not_match_style_substring(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "you like style",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertNotIn("you're welcome", reply.response.lower())
+        self.assertNotIn("you’re welcome", reply.response.lower())
 
     def test_prompt_mentions_krytan_leggings_style_context(self) -> None:
         event = event_from_game_log(
@@ -987,7 +1204,10 @@ class HermesDaemonTests(unittest.TestCase):
         prompts: list[str] = []
         original_generate = hermes_daemon.ollama_generate_visible
         try:
-            hermes_daemon.ollama_generate_visible = lambda prompt: prompts.append(prompt) or "Yes. They threaten Ascalon, so we prepare and hit them properly."
+            hermes_daemon.ollama_generate_visible = (
+                lambda prompt, timeout_seconds=None: prompts.append(prompt)
+                or "Yes. They threaten Ascalon, so we prepare and hit them properly."
+            )
             replies = process_event(
                 event_from_game_log(
                     {
@@ -1046,6 +1266,64 @@ class HermesDaemonTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "missed clear player intent"):
             validate_model_reply("Lakeside again. Reminds me of my first few errands here.", event)
+
+    def test_model_reply_rejects_pet_evolution_intent_miss(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "at what level does the pet develop dire or hearty",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("Yeah, I’m here. What are we doing?", event)
+
+    def test_model_reply_rejects_scourge_lfg_intent_miss(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "i think you need to repost LFG with scourge. right now its merged into your party with a blank description",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("I’m listening. What’s up?", event)
+
+    def test_model_reply_rejects_tunnel_plan_intent_miss(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "lets head into the tunnels",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("I’m listening. What’s up?", event)
+
+    def test_model_reply_rejects_scourge_beneath_intent_miss(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "wanna do another tunnel run?",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 779,
+                    "map_name": "Piken Square",
+                    "active_quest_id": 1456,
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("Alright, tunnels then. Keep it tight and do not let them wrap around us.", event)
 
     def test_azele_fallback_handles_level_up_congratulations(self) -> None:
         decision = fallback_rule_decision(
@@ -1131,7 +1409,10 @@ class HermesDaemonTests(unittest.TestCase):
         prompts: list[str] = []
         original_generate = hermes_daemon.ollama_generate_visible
         try:
-            hermes_daemon.ollama_generate_visible = lambda prompt: prompts.append(prompt) or "We would not. Not while they are threatening Ascalon."
+            hermes_daemon.ollama_generate_visible = (
+                lambda prompt, timeout_seconds=None: prompts.append(prompt)
+                or "We would not. Not while they are threatening Ascalon."
+            )
             replies = process_event(
                 event_from_game_log(
                     {
@@ -1421,6 +1702,8 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertNotRegex("I know. You can say it again though.", FILLER_OPENER_PATTERN)
 
     def test_model_reply_shape_rejects_runons_and_dangling_splits(self) -> None:
+        self.assertTrue(model_reply_has_bad_shape("I"))
+        self.assertTrue(model_reply_has_bad_shape("Yeah"))
         self.assertTrue(
             model_reply_has_bad_shape(
                 "I know you do like that outfit though it does fit well on me today isn't it nice hearing from someone who knows exactly why they look good here"
@@ -1609,6 +1892,22 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(decision.response, "Yeah. You know me. Keep up.")
 
+    def test_azele_fallback_handles_locked_and_loaded_tease(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "you had to locked and loaded didn't you",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertTrue(decision.should_speak)
+        self.assertRegex(decision.response.lower(), r"ready|opening|walked|dare")
+        self.assertNotIn("okay. keep going", decision.response.lower())
+
     def test_azele_fallback_does_not_misread_you_as_yo(self) -> None:
         decision = fallback_rule_decision(
             event_from_game_log(
@@ -1688,6 +1987,72 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(replies[0].trigger_log_id, 815)
         self.assertRegex(replies[0].message.lower(), r"ale|fifteen|15|warm|city|stairs")
         self.assertGreater(world_state.last_player_chat_at, 0)
+
+    def test_player_chat_ollama_uses_short_latency_budget(self) -> None:
+        original_settings = hermes_daemon.settings
+        original_generate = hermes_daemon.ollama_generate_visible
+        observed: list[float | None] = []
+
+        def fake_generate(prompt: str, *, timeout_seconds: float | None = None) -> str:
+            observed.append(timeout_seconds)
+            return "I know. Still nice to hear."
+
+        try:
+            hermes_daemon.settings = replace(
+                original_settings,
+                hermes_player_chat_ollama_timeout_seconds=3.5,
+            )
+            hermes_daemon.ollama_generate_visible = fake_generate
+
+            decision = hermes_daemon.decide_with_ollama(
+                event_from_game_log(
+                    {
+                        "sender": "Player",
+                        "channel": "party",
+                        "message": "do you like the new armor?",
+                        "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                    }
+                )
+            )
+        finally:
+            hermes_daemon.settings = original_settings
+            hermes_daemon.ollama_generate_visible = original_generate
+
+        self.assertEqual(decision.response, "I know. Still nice to hear.")
+        self.assertEqual(observed, [3.5])
+
+    def test_player_chat_ollama_timeout_falls_back_quickly(self) -> None:
+        original = hermes_daemon.decide_with_ollama
+
+        def timeout(_event: hermes_daemon.TelemetryEvent) -> hermes_daemon.HermesDecision:
+            raise TimeoutError("timed out")
+
+        hermes_daemon.decide_with_ollama = timeout
+        try:
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "Player",
+                        "channel": "party",
+                        "message": "hey azele, are you there?",
+                        "metadata": {
+                            "event_type": "player_chat",
+                            "persona": "Azele",
+                            "session_id": "chat-timeout",
+                            "map_id": 148,
+                            "map_name": "Ascalon City",
+                        },
+                    }
+                ),
+                record_id=816,
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.decide_with_ollama = original
+
+        self.assertEqual(len(replies), 1)
+        self.assertNotIn("one more detail", replies[0].message.lower())
+        self.assertTrue(replies[0].message)
 
     def test_unknown_quest_change_is_silent(self) -> None:
         replies = process_event(
@@ -2378,6 +2743,56 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(decision.urgency, "HIGH")
         self.assertIn("42%", decision.response)
         self.assertTrue(any(word in decision.response.lower() for word in ["hit", "pain", "cover", "help"]))
+
+    def test_environment_alert_preserves_damage_metadata(self) -> None:
+        event = event_from_environment_alert(
+            {
+                "alert_type": "under_attack",
+                "severity": "HIGH",
+                "message": "Azele is taking hits.",
+                "payload": {
+                    "player_hp": 0.34,
+                    "player_hp_previous": 0.51,
+                    "player_hp_drop": 0.17,
+                    "hp_threshold_crossed": "35%",
+                    "damage_severity": "critical",
+                },
+            }
+        )
+
+        self.assertEqual(event.player_hp_previous, 0.51)
+        self.assertEqual(event.player_hp_drop, 0.17)
+        self.assertEqual(event.hp_threshold_crossed, "35%")
+        self.assertEqual(event.damage_severity, "critical")
+
+    def test_fallback_rule_replies_to_near_death_damage(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_environment_alert(
+                {
+                    "alert_type": "under_attack",
+                    "severity": "HIGH",
+                    "message": "Azele is almost down.",
+                    "payload": {
+                        "player_hp": 0.18,
+                        "player_hp_previous": 0.31,
+                        "player_hp_drop": 0.13,
+                        "hp_threshold_crossed": "20%",
+                        "damage_severity": "near_death",
+                    },
+                }
+            )
+        )
+
+        self.assertTrue(decision.should_speak)
+        self.assertEqual(decision.urgency, "HIGH")
+        self.assertIn("18%", decision.response)
+        self.assertLessEqual(len(decision.response), 119)
+
+    def test_synthetic_eval_smoke_passes(self) -> None:
+        summary, failures = run_eval(total=100, failure_limit=10)
+
+        self.assertEqual(summary.critical_failed, 0, failures[:3])
+        self.assertGreaterEqual(summary.pass_rate, 0.995, failures[:3])
 
     def test_combat_started_noise_is_silent(self) -> None:
         replies = process_event(

@@ -8,6 +8,7 @@ backend/.state/
 backend/logs/
 backend/hermes/personas/*.md
 !backend/hermes/personas/README.md
+reports/
 *.log
 
 # Native build outputs
