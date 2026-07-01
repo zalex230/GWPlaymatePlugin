@@ -3280,16 +3280,31 @@ def attach_tts_audio(reply: CompanionReplyInsert) -> CompanionReplyInsert:
         )
 
 
-def insert_reply(reply: CompanionReplyInsert, *, consumed: bool = False) -> None:
+def tts_audio_required() -> bool:
+    return settings.hermes_tts_provider in {"kokoro", "kokoro-local", "chatterbox-turbo", "chatterbox_turbo"} and _supabase_configured()
+
+
+def reply_has_audio(reply: CompanionReplyInsert) -> bool:
+    return bool(reply.metadata.get("audio_url") or reply.metadata.get("audio_signed_url"))
+
+
+def insert_reply(reply: CompanionReplyInsert, *, consumed: bool = False) -> CompanionReplyInsert | None:
     if not _supabase_configured():
-        return
-    client = create_supabase_client(settings)
+        return None
     reply = attach_tts_audio(reply)
+    if tts_audio_required() and not reply_has_audio(reply):
+        print(
+            f"Hermes skipped companion reply without TTS audio: {reply.metadata.get('tts_error') or 'missing audio_url'}",
+            flush=True,
+        )
+        return None
+    client = create_supabase_client(settings)
     row = reply.to_supabase_insert()
     if consumed:
         row["consumed_at"] = utc_now_iso()
         row["payload"]["delivery"] = "direct_lan"
     client.table(COMPANION_REPLIES_TABLE).insert(row).execute()
+    return reply
 
 
 def _parse_created_at(value: Any) -> datetime | None:
@@ -3584,13 +3599,17 @@ def post_direct_event(event: TelemetryEvent) -> HermesEventResponse:
         return HermesEventResponse(replies=[])
 
     audit_error = None
+    delivered_replies = replies
     if settings.hermes_audit_replies:
+        delivered_replies = []
         try:
             for reply in replies:
-                insert_reply(reply, consumed=True)
+                inserted = insert_reply(reply, consumed=True)
+                if inserted:
+                    delivered_replies.append(inserted)
         except Exception as exc:
             audit_error = str(exc)
-    return HermesEventResponse(replies=[reply.message for reply in replies], audit_error=audit_error)
+    return HermesEventResponse(replies=[reply.message for reply in delivered_replies], audit_error=audit_error)
 
 
 async def subscribe_to_game_logs() -> None:
@@ -3711,8 +3730,9 @@ async def ambient_heartbeat_loop() -> None:
                 pending = await asyncio.to_thread(has_unconsumed_ambient_reply, identity[0], identity[1])
                 reply = None if pending else ambient_heartbeat_reply(use_ollama=settings.hermes_use_ollama)
                 if reply:
-                    await asyncio.to_thread(insert_reply, reply)
-                    print(f"Hermes ambient quip inserted for {reply.persona}: {reply.message}", flush=True)
+                    inserted = await asyncio.to_thread(insert_reply, reply)
+                    if inserted:
+                        print(f"Hermes ambient quip inserted for {inserted.persona}: {inserted.message}", flush=True)
         except Exception as exc:
             print(f"GWPlaymate Hermes ambient heartbeat error: {type(exc).__name__}.", flush=True)
         await asyncio.sleep(AMBIENT_HEARTBEAT_POLL_SECONDS)

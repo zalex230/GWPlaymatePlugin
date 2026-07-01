@@ -278,6 +278,34 @@ class HermesDaemonTests(unittest.TestCase):
             hermes_daemon.settings = original_settings
             hermes_daemon.generate_tts_audio = original_generate
 
+    def test_insert_reply_skips_voice_reply_without_audio(self) -> None:
+        original_settings = hermes_daemon.settings
+        original_generate = hermes_daemon.generate_tts_audio
+        original_create_client = hermes_daemon.create_supabase_client
+        try:
+            hermes_daemon.settings = replace(
+                original_settings,
+                hermes_tts_provider="chatterbox-turbo",
+                supabase_url="https://example.supabase.co",
+                supabase_service_key="service-key",
+            )
+            hermes_daemon.generate_tts_audio = lambda text, expression: None
+
+            def fail_if_called(settings: object) -> object:
+                raise AssertionError("text-only voice reply should not be inserted")
+
+            hermes_daemon.create_supabase_client = fail_if_called
+
+            inserted = hermes_daemon.insert_reply(
+                CompanionReplyInsert(persona="Azele", message="I know. Still nice to hear.", urgency="NORMAL")
+            )
+
+            self.assertIsNone(inserted)
+        finally:
+            hermes_daemon.settings = original_settings
+            hermes_daemon.generate_tts_audio = original_generate
+            hermes_daemon.create_supabase_client = original_create_client
+
     def test_split_gw_chat_lines_uses_third_line_instead_of_clipping_second(self) -> None:
         text = (
             "Ascalon City looks busy and familiar, and I missed that more than I expected. "
