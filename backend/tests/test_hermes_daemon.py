@@ -150,10 +150,30 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(reply_expression("I’m here. What are we doing?"), "neutral")
 
     def test_spoken_expression_label_is_split_from_visible_text(self) -> None:
-        expression, message = split_spoken_expression_label("confident: I know. Still nice to hear.")
+        cases = {
+            "neutral": "neutral",
+            "happy": "happy",
+            "teasing": "teasing",
+            "flirty": "flirty",
+            "confident": "confident",
+            "annoyed": "annoyed",
+            "angry": "angry",
+            "worried": "worried",
+            "sad": "sad",
+            "embarrassed": "embarrassed",
+            "irritated": "annoyed",
+            "scared": "worried",
+            "playful": "teasing",
+            "romantic": "flirty",
+            "shy": "embarrassed",
+        }
 
-        self.assertEqual(expression, "confident")
-        self.assertEqual(message, "I know. Still nice to hear.")
+        for label, expected_expression in cases.items():
+            with self.subTest(label=label):
+                expression, message = split_spoken_expression_label(f"{label}: I know. Still nice to hear.")
+
+                self.assertEqual(expression, expected_expression)
+                self.assertEqual(message, "I know. Still nice to hear.")
 
     def test_chatterbox_tts_payload_includes_expression_controls(self) -> None:
         original_settings = hermes_daemon.settings
