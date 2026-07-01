@@ -3203,9 +3203,6 @@ def _chatterbox_tts_payload(text: str, *, expression: str) -> dict[str, Any]:
         "exaggeration": profile.get("exaggeration", settings.chatterbox_tts_exaggeration),
         "temperature": profile.get("temperature", settings.chatterbox_tts_temperature),
     }
-    tags = [str(tag) for tag in profile.get("tags", []) if str(tag).strip()]
-    if tags:
-        payload["paralinguistic_tags"] = tags
     return payload
 
 

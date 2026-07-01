@@ -43,10 +43,14 @@ class ChatterboxTurboServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
 
-    def test_render_text_adds_expression_tags(self) -> None:
-        request = service.SpeechRequest(input="Do not let the Charr through.", expression="angry")
+    def test_render_text_never_adds_speakable_expression_tags(self) -> None:
+        request = service.SpeechRequest(
+            input="Do not let the Charr through.",
+            expression="angry",
+            paralinguistic_tags=["[angry]", "[gasp]"],
+        )
 
-        self.assertEqual(service._render_text(request), "[angry] Do not let the Charr through.")
+        self.assertEqual(service._render_text(request), "Do not let the Charr through.")
 
     def test_encode_wav_writes_windows_pcm_audio(self) -> None:
         class FakeWave:

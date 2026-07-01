@@ -95,12 +95,7 @@ def preload_model() -> None:
 
 
 def _render_text(request: SpeechRequest) -> str:
-    tags = [tag for tag in request.paralinguistic_tags if tag.strip()]
-    if not tags and request.expression in EXPRESSION_TAGS:
-        tags = [EXPRESSION_TAGS[request.expression]]
-    if not tags:
-        return request.input.strip()
-    return f"{' '.join(tags)} {request.input.strip()}"
+    return request.input.strip()
 
 
 def _generate_wave(request: SpeechRequest) -> tuple[Any, int]:

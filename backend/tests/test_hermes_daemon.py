@@ -204,8 +204,7 @@ class HermesDaemonTests(unittest.TestCase):
             self.assertEqual(payload["expression"], "teasing")
             self.assertEqual(payload["exaggeration"], 0.45)
             self.assertEqual(payload["temperature"], 0.9)
-            self.assertIn("[teasing]", payload["paralinguistic_tags"])
-            self.assertIn("[chuckle]", payload["paralinguistic_tags"])
+            self.assertNotIn("paralinguistic_tags", payload)
         finally:
             hermes_daemon.settings = original_settings
 
@@ -215,10 +214,12 @@ class HermesDaemonTests(unittest.TestCase):
         worried = hermes_daemon._chatterbox_tts_payload("Someone is down.", expression="worried")
 
         self.assertEqual(angry["expression"], "angry")
-        self.assertIn("[angry]", angry["paralinguistic_tags"])
         self.assertGreater(angry["temperature"], hermes_daemon._chatterbox_tts_payload("Fine.", expression="sad")["temperature"])
-        self.assertIn("[softly]", flirty["paralinguistic_tags"])
-        self.assertIn("[gasp]", worried["paralinguistic_tags"])
+        self.assertEqual(flirty["expression"], "flirty")
+        self.assertEqual(worried["expression"], "worried")
+        self.assertNotIn("paralinguistic_tags", angry)
+        self.assertNotIn("paralinguistic_tags", flirty)
+        self.assertNotIn("paralinguistic_tags", worried)
 
     def test_chatterbox_tts_provider_falls_back_to_kokoro(self) -> None:
         original_settings = hermes_daemon.settings
