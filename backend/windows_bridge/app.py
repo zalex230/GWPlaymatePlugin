@@ -33,6 +33,37 @@ def _client():
     return create_supabase_client(settings)
 
 
+def _consume_pending_replies_before_player_chat(event: TelemetryEvent, client: Any) -> int:
+    if event.event_type != "player_chat" or event.channel != "party":
+        return 0
+    response = (
+        client.table(COMPANION_REPLIES_TABLE)
+        .select("id,payload")
+        .eq("persona", event.persona)
+        .is_("consumed_at", "null")
+        .order("created_at", desc=False)
+        .limit(100)
+        .execute()
+    )
+    pending_ids: list[int] = []
+    for row in response.data or []:
+        row_id = row.get("id")
+        if not isinstance(row_id, int):
+            continue
+        payload = row.get("payload") or {}
+        row_session_id = str(payload.get("session_id") or "").strip()
+        if event.session_id and row_session_id and row_session_id != event.session_id:
+            continue
+        pending_ids.append(row_id)
+    if not pending_ids:
+        return 0
+    client.table(COMPANION_REPLIES_TABLE).update({"consumed_at": datetime.now(timezone.utc).isoformat()}).in_(
+        "id",
+        pending_ids,
+    ).execute()
+    return len(pending_ids)
+
+
 def _insert_event(event: TelemetryEvent) -> dict[str, Any]:
     if event.channel in NOISY_CHANNELS:
         return {"accepted": False, "reason": "noisy_channel"}
@@ -44,6 +75,12 @@ def _insert_event(event: TelemetryEvent) -> dict[str, Any]:
         return {"accepted": False, "reason": "throttled"}
 
     client = _client()
+    try:
+        consumed = _consume_pending_replies_before_player_chat(event, client)
+        if consumed:
+            print(f"Windows bridge consumed {consumed} pending replies before player chat.", flush=True)
+    except Exception as exc:
+        print(f"Windows bridge pending reply cleanup skipped: {type(exc).__name__}.", flush=True)
     if event.event_type in ENVIRONMENT_EVENT_TYPES:
         client.table(ENVIRONMENT_ALERTS_TABLE).insert(event.to_environment_alert_insert()).execute()
     else:

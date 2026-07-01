@@ -43,6 +43,57 @@ class _CountingSupabase:
         return self.tables[name]
 
 
+class _PendingReplyTable:
+    def __init__(self, rows):
+        self.rows = rows
+        self.updated_ids = []
+
+    def select(self, _columns):
+        return self
+
+    def eq(self, _column, _value):
+        return self
+
+    def is_(self, _column, _value):
+        return self
+
+    def order(self, _column, desc=False):
+        return self
+
+    def limit(self, _limit):
+        return self
+
+    def update(self, _payload):
+        return self
+
+    def in_(self, _column, values):
+        self.updated_ids.extend(values)
+        return self
+
+    def execute(self):
+        return type("Response", (), {"data": self.rows})()
+
+
+class _PlayerChatCleanupSupabase:
+    def __init__(self):
+        self.reply_table = _PendingReplyTable(
+            [
+                {
+                    "id": 51,
+                    "payload": {"session_id": "local-playtest", "trigger": "ambient_heartbeat"},
+                }
+            ]
+        )
+        self.game_log_table = _CountingTable()
+
+    def table(self, name):
+        if name == "companion_replies":
+            return self.reply_table
+        if name == "game_logs":
+            return self.game_log_table
+        return _CountingTable()
+
+
 class _FakeReplyTable:
     def __init__(self, rows=None):
         self.updated_ids = []
@@ -133,6 +184,28 @@ class WindowsBridgeTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"accepted": True})
+
+    def test_post_player_chat_consumes_pending_replies_first(self) -> None:
+        client = TestClient(app)
+        fake = _PlayerChatCleanupSupabase()
+        payload = {
+            "source": "gwtoolboxpp-playmate",
+            "persona": "Azele",
+            "client_time": "2026-06-26T12:00:00Z",
+            "event_type": "player_chat",
+            "sender": "Player",
+            "channel": "party",
+            "message": "hey azele",
+            "session_id": "local-playtest",
+        }
+
+        with patch("backend.windows_bridge.app._client", return_value=fake):
+            response = client.post("/v1/playmate/events", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"accepted": True})
+        self.assertEqual(fake.reply_table.updated_ids, [51])
+        self.assertEqual(len(fake.game_log_table.inserts), 1)
 
     def test_post_event_suppresses_noisy_quest_details(self) -> None:
         client = TestClient(app)
