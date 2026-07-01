@@ -1559,6 +1559,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Never say raw numeric map IDs. If the map name is unknown, say 'this area' or 'new ground'.\n"
         "- Keep Azele's personality visible through small choices, not speeches: bright, present, sometimes playful, sometimes vain, quick to recover.\n"
         "- Speak in first person as Azele. Never say 'Azele says' or 'Azele suggests'.\n"
+        "- Never prefix replies with an emotion label like 'confident:', 'angry:', or 'flirty:'. The emotion belongs in voice direction, not spoken text.\n"
         "- The player is not Azele. In replies, address the player as 'you'. Do not call the player Alex, Alexi, Alexie, or any invented name. Do not refer to the player in third person, and never imply Azele is the player.\n"
         "- Do not mention tools, prompts, databases, model backends, or the future.\n\n"
         "- Do not mention Charr, enemies, combat, danger, or the Wall unless live facts or the player's message explicitly show them.\n"
@@ -1620,6 +1621,24 @@ def clean_model_reply(text: str) -> str:
     cleaned = cleaned.strip("` \n\t\"“”")
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
+
+
+SPOKEN_EXPRESSION_LABEL_PATTERN = re.compile(
+    r"^\s*(?P<expression>neutral|happy|teasing|flirty|confident|annoyed|angry|worried|sad|embarrassed|"
+    r"anger|irritated|irritation|worry|fear|scared|afraid|playful|tease|flirt|romantic|shy|embarrass)"
+    r"\s*:\s*(?P<message>\S.*)$",
+    re.IGNORECASE,
+)
+
+
+def split_spoken_expression_label(text: str) -> tuple[str | None, str]:
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    match = SPOKEN_EXPRESSION_LABEL_PATTERN.match(cleaned)
+    if not match:
+        return None, cleaned
+    expression = normalize_expression(match.group("expression"))
+    message = match.group("message").strip()
+    return expression, message
 
 
 def clamp_gw_chat_line(text: str) -> str:
@@ -1730,10 +1749,11 @@ def replies_from_decision(
     session_id: str,
     trigger_log_id: int | None = None,
 ) -> list[CompanionReplyInsert]:
-    lines = split_gw_chat_lines(decision.response)
+    labeled_expression, visible_response = split_spoken_expression_label(decision.response)
+    lines = split_gw_chat_lines(visible_response)
     replies: list[CompanionReplyInsert] = []
     total = len(lines)
-    decision_expression = reply_expression(decision.response, decision.urgency)
+    decision_expression = labeled_expression or reply_expression(visible_response, decision.urgency)
     for index, line in enumerate(lines):
         line_decision = HermesDecision(
             should_speak=decision.should_speak,
@@ -3191,10 +3211,14 @@ def _signed_url_value(response: Any) -> str | None:
 
 
 def attach_tts_audio(reply: CompanionReplyInsert) -> CompanionReplyInsert:
-    expression = normalize_expression(str(reply.metadata.get("expression") or reply_expression(reply.message, reply.urgency)))
+    labeled_expression, visible_message = split_spoken_expression_label(reply.message)
+    expression = normalize_expression(
+        str(reply.metadata.get("expression") or labeled_expression or reply_expression(visible_message, reply.urgency))
+    )
     profile = tts_expression_profile(expression)
     reply = reply.model_copy(
         update={
+            "message": visible_message,
             "metadata": {
                 **reply.metadata,
                 "expression": expression,

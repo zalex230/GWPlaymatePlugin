@@ -47,6 +47,7 @@ from backend.hermes_daemon.daemon import (
     sanitize_memory_for_prompt,
     should_flush_memory_buffer,
     should_use_ollama_for_event,
+    split_spoken_expression_label,
     validate_model_reply,
     world_state,
 )
@@ -147,6 +148,12 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(reply_expression("You think I look pretty like this?"), "flirty")
         self.assertEqual(reply_expression("I’m glad you asked."), "happy")
         self.assertEqual(reply_expression("I’m here. What are we doing?"), "neutral")
+
+    def test_spoken_expression_label_is_split_from_visible_text(self) -> None:
+        expression, message = split_spoken_expression_label("confident: I know. Still nice to hear.")
+
+        self.assertEqual(expression, "confident")
+        self.assertEqual(message, "I know. Still nice to hear.")
 
     def test_chatterbox_tts_payload_includes_expression_controls(self) -> None:
         original_settings = hermes_daemon.settings
@@ -273,6 +280,38 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertGreater(len(replies), 1)
         self.assertEqual({reply.metadata["expression"] for reply in replies}, {"angry"})
+
+    def test_replies_strip_leading_expression_label_but_keep_tts_expression(self) -> None:
+        decision = hermes_daemon.HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="NORMAL",
+            response="confident: I know. Still nice to hear.",
+        )
+
+        replies = hermes_daemon.replies_from_decision(decision, persona="Azele", session_id="emotion-test")
+
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0].message, "I know. Still nice to hear.")
+        self.assertEqual(replies[0].metadata["expression"], "confident")
+
+    def test_attach_tts_audio_defensively_strips_expression_label(self) -> None:
+        original_settings = hermes_daemon.settings
+        try:
+            hermes_daemon.settings = replace(original_settings, hermes_tts_provider="none")
+            reply = hermes_daemon.attach_tts_audio(
+                CompanionReplyInsert(
+                    persona="Azele",
+                    message="flirty: You noticed?",
+                    urgency="NORMAL",
+                )
+            )
+
+            self.assertEqual(reply.message, "You noticed?")
+            self.assertEqual(reply.metadata["expression"], "flirty")
+            self.assertEqual(reply.metadata["tts_expression_profile"]["expression"], "flirty")
+        finally:
+            hermes_daemon.settings = original_settings
 
     def test_fallback_rule_replies_to_party_chat(self) -> None:
         decision = fallback_rule_decision(
