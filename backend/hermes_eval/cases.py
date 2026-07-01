@@ -121,6 +121,15 @@ BASE_DIALOGUE_CASES: tuple[EvalCase, ...] = (
         forbidden_patterns=("what purple thing",),
     ),
     EvalCase(
+        id="purple-hammer-slang",
+        event=_player_event("nice purp hammer.", map_id=147, map_name="The Northlands"),
+        expected_intent="loot",
+        expected_topic="Purple rarity loot",
+        required_anchors=("Purple", "hammer"),
+        forbidden_patterns=("what's up", "one more detail", "maybe"),
+        severity="critical",
+    ),
+    EvalCase(
         id="krytan-leggings",
         event=_player_event("the Krytan leggings are an upgrade but the skirt is longer"),
         expected_intent="gear",

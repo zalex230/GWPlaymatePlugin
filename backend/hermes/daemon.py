@@ -2827,6 +2827,14 @@ def azele_gw1_context_reply(context: ResolvedGameContext, event: TelemetryEvent)
             return f"Black Dye? In pre-Searing? That is ridiculous luck. Looked like it came from {source_name}."
         return "Black Dye in pre-Searing is huge. I did not see what dropped it, though."
     if context.entry_id == "loot.purple":
+        if "hammer" in message:
+            return first_fresh_reply(
+                [
+                    "Purple hammer? Nice. In pre, that is absolutely worth checking.",
+                    "Yeah, a purple hammer is a real find here. Show me the damage and mod.",
+                    "Nice. Purple hammer in the Northlands is not something I ignore.",
+                ]
+            )
         return first_fresh_reply(
             [
                 "Purple out here? That is worth checking. What did it roll?",

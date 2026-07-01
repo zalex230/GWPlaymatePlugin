@@ -107,7 +107,18 @@ GW1_KNOWLEDGE: tuple[KnowledgeEntry, ...] = (
     KnowledgeEntry(
         id="loot.purple",
         canonical_name="Purple rarity loot",
-        aliases=("purple", "pruple", "purple drop", "purple thing", "purple item", "purple rarity"),
+        aliases=(
+            "purple",
+            "purp",
+            "pruple",
+            "purple drop",
+            "purp drop",
+            "purple thing",
+            "purple item",
+            "purple rarity",
+            "purple hammer",
+            "purp hammer",
+        ),
         category="loot",
         era_scope="all",
         response_anchors=("Purple", "worth a look", "what it rolled"),
@@ -234,9 +245,9 @@ def resolve_gw1_context(event: Any, recent_context: str | Iterable[str] | None =
                 score += _pre_searing_score(event, combined_text)
             if entry.id == "quest.scourge_beneath" and re.search(r"\btun+e?ls?\b|\btunnels?\b", message_text):
                 score += 0.08
-            if entry.category == "loot" and re.search(r"\b(?:drop|dropped|dye|purple|pruple|rarity|item)\b", message_text):
+            if entry.category == "loot" and re.search(r"\b(?:drop|dropped|dye|purple|purp|pruple|rarity|item)\b", message_text):
                 score += 0.16
-            if entry.category == "enemy" and re.search(r"\b(?:dye|drop|dropped|purple|pruple|item|rarity)\b", message_text):
+            if entry.category == "enemy" and re.search(r"\b(?:dye|drop|dropped|purple|purp|pruple|item|rarity)\b", message_text):
                 score -= 0.2
             if entry.id == "map.ascalon_city" and "fort ranik" in combined_text:
                 score -= 0.18

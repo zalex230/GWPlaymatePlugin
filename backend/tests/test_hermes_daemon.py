@@ -794,6 +794,7 @@ class HermesDaemonTests(unittest.TestCase):
             ("what's the LDoA plan?", "Legendary Defender of Ascalon"),
             ("black dye just dropped", "Black Dye"),
             ("ooo a pruple thing", "Purple rarity loot"),
+            ("nice purp hammer", "Purple rarity loot"),
             ("Krytan leggings are a longer skirt upgrade", "Krytan Leggings"),
             ("what pet should we get Devona?", "Devona pet choice"),
         ]
@@ -810,6 +811,27 @@ class HermesDaemonTests(unittest.TestCase):
                     )
                 )
                 self.assertEqual(context.canonical_topic, topic)
+
+    def test_purp_hammer_fast_path_reacts_to_named_loot(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "nice purp hammer.",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 147,
+                    "map_name": "The Northlands",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(should_use_fast_fallback_before_ollama(event))
+        self.assertRegex(reply.response.lower(), r"purple|hammer|pre|northlands")
+        self.assertNotRegex(reply.response.lower(), r"what'?s up|one more detail|maybe|keep going")
 
     def test_fallback_handles_tunnel_bailout(self) -> None:
         event = event_from_game_log(
