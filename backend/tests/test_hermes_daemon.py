@@ -2398,7 +2398,7 @@ class HermesDaemonTests(unittest.TestCase):
 
     def test_map_entry_uses_ollama_generation_when_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
-        hermes_daemon.character_reply_with_ollama = lambda event: hermes_daemon.HermesDecision(
+        hermes_daemon.character_reply_with_ollama = lambda event, **_: hermes_daemon.HermesDecision(
             should_speak=True,
             channel_override="CHANNEL_PARTY",
             urgency="LOW",
@@ -2430,7 +2430,7 @@ class HermesDaemonTests(unittest.TestCase):
     def test_map_entry_drops_stale_reply_when_player_speaks_during_generation(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
 
-        def generate_after_player_chat(event: hermes_daemon.TelemetryEvent) -> hermes_daemon.HermesDecision:
+        def generate_after_player_chat(event: hermes_daemon.TelemetryEvent, **_: object) -> hermes_daemon.HermesDecision:
             world_state.last_player_chat_at = time.time()
             return hermes_daemon.HermesDecision(
                 should_speak=True,
@@ -2465,7 +2465,7 @@ class HermesDaemonTests(unittest.TestCase):
 
     def test_ambient_snapshot_uses_ollama_generation_when_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
-        hermes_daemon.character_reply_with_ollama = lambda event: hermes_daemon.HermesDecision(
+        hermes_daemon.character_reply_with_ollama = lambda event, **_: hermes_daemon.HermesDecision(
             should_speak=True,
             channel_override="CHANNEL_PARTY",
             urgency="LOW",

@@ -236,6 +236,20 @@ def readable_game_text(value: Any) -> str:
     return cleaned[:160]
 
 
+def event_debug_label(event: TelemetryEvent, *, record_id: int | None = None) -> str:
+    parts = [
+        f"record_id={record_id}" if record_id is not None else "record_id=none",
+        f"event_type={event.event_type or 'unknown'}",
+        f"channel={event.channel or 'unknown'}",
+    ]
+    if event.map_id is not None:
+        parts.append(f"map_id={event.map_id}")
+    message = readable_game_text(event.message)
+    if message:
+        parts.append(f"message={message!r}")
+    return " ".join(parts)
+
+
 def event_from_game_log(record: dict[str, Any]) -> TelemetryEvent:
     metadata = record.get("payload") or record.get("metadata") or {}
     return TelemetryEvent(
@@ -2985,7 +2999,12 @@ def repair_model_reply(reply: str) -> str:
     return cleaned.strip()
 
 
-def character_reply_with_ollama(event: TelemetryEvent, *, timeout_seconds: float | None = None) -> HermesDecision:
+def character_reply_with_ollama(
+    event: TelemetryEvent,
+    *,
+    timeout_seconds: float | None = None,
+    record_id: int | None = None,
+) -> HermesDecision:
     started_at = time.perf_counter()
     response = ollama_generate_visible(build_character_reply_prompt(event), timeout_seconds=timeout_seconds)
     elapsed = time.perf_counter() - started_at
@@ -2999,7 +3018,11 @@ def character_reply_with_ollama(event: TelemetryEvent, *, timeout_seconds: float
         reply = validate_model_reply(cleaned, event)
     except Exception as exc:
         preview = clamp_gw_chat_line(cleaned)[:160]
-        print(f"Ollama character reply rejected ({type(exc).__name__}: {exc}): {preview!r}", flush=True)
+        print(
+            f"Ollama character reply rejected for {event_debug_label(event, record_id=record_id)} "
+            f"({type(exc).__name__}: {exc}): {preview!r}",
+            flush=True,
+        )
         raise
     return HermesDecision(
         should_speak=True,
@@ -3009,14 +3032,15 @@ def character_reply_with_ollama(event: TelemetryEvent, *, timeout_seconds: float
     )
 
 
-def decide_with_ollama(event: TelemetryEvent) -> HermesDecision:
+def decide_with_ollama(event: TelemetryEvent, *, record_id: int | None = None) -> HermesDecision:
     if should_use_direct_character_reply(event):
         if event.event_type == "player_chat" and event.channel == "party":
             return character_reply_with_ollama(
                 event,
                 timeout_seconds=settings.hermes_player_chat_ollama_timeout_seconds,
+                record_id=record_id,
             )
-        return character_reply_with_ollama(event)
+        return character_reply_with_ollama(event, record_id=record_id)
 
     import ollama
 
@@ -4055,11 +4079,15 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
         decision = fallback_rule_decision(event)
     elif use_ollama and should_use_ollama_for_event(event):
         try:
-            decision = decide_with_ollama(event)
+            decision = decide_with_ollama(event, record_id=record_id)
         except Exception as exc:
             detail = str(exc).strip()
             suffix = f": {detail}" if detail else ""
-            print(f"Ollama decision failed; using fallback rules ({type(exc).__name__}{suffix}).", flush=True)
+            print(
+                f"Ollama decision failed for {event_debug_label(event, record_id=record_id)}; "
+                f"using fallback rules ({type(exc).__name__}{suffix}).",
+                flush=True,
+            )
             decision = fallback_rule_decision(event)
     else:
         decision = fallback_rule_decision(event)
