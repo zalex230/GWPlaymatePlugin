@@ -2963,6 +2963,86 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("18%", decision.response)
         self.assertLessEqual(len(decision.response), 119)
 
+    def test_recent_combat_reflection_uses_party_down_context_without_ollama(self) -> None:
+        process_event(
+            event_from_game_log(
+                {
+                    "sender": "System",
+                    "channel": "system",
+                    "message": "Party member down.",
+                    "payload": {
+                        "persona": "Azele",
+                        "event_type": "party_member_down",
+                        "map_id": 147,
+                        "map_name": "The Northlands",
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "cool. that was a tough situation earlier",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 148,
+                    "map_name": "Ascalon City",
+                    "session_id": "combat-reflection",
+                },
+            }
+        )
+
+        self.assertTrue(should_use_fast_fallback_before_ollama(event))
+        replies = process_event(event, record_id=1742, use_ollama=True)
+
+        self.assertEqual(len(replies), 1)
+        self.assertIn("too close", replies[0].message.lower())
+        self.assertIn("Ascalon City", replies[0].message)
+        self.assertNotIn("what are we doing", replies[0].message.lower())
+
+    def test_charr_hurt_followup_reflects_recent_combat(self) -> None:
+        process_event(
+            event_from_game_log(
+                {
+                    "sender": "System",
+                    "channel": "system",
+                    "message": "Party member down.",
+                    "payload": {
+                        "persona": "Azele",
+                        "event_type": "party_member_down",
+                        "map_id": 147,
+                        "map_name": "The Northlands",
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "those charr hurt",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 148,
+                    "map_name": "Ascalon City",
+                    "session_id": "combat-reflection",
+                },
+            }
+        )
+
+        self.assertTrue(should_use_fast_fallback_before_ollama(event))
+        replies = process_event(event, record_id=1743, use_ollama=True)
+
+        self.assertEqual(len(replies), 1)
+        self.assertIn("Charr", replies[0].message)
+        self.assertIn("hit hard", replies[0].message)
+        self.assertIn("Ascalon City", replies[0].message)
+
     def test_synthetic_eval_smoke_passes(self) -> None:
         summary, failures = run_eval(total=100, failure_limit=10)
 

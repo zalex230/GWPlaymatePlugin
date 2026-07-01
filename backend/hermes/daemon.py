@@ -1857,6 +1857,8 @@ def should_use_fast_fallback_before_ollama(event: TelemetryEvent) -> bool:
         return False
     if is_alcohol_consumable_context(event.message):
         return True
+    if is_recent_combat_reflection_context(event.message):
+        return True
     context = resolve_gw1_context(event)
     return context.matched and context.confidence >= 0.88 and context.entry_id in {
         "quest.scourge_beneath",
@@ -2607,6 +2609,60 @@ CHARR_SAVE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+RECENT_COMBAT_REFLECTION_PATTERN = re.compile(
+    r"\b(?:"
+    r"tough|rough|close\s+call|almost\s+died|nearly\s+died|barely\s+(?:made|survived)|"
+    r"almost\s+went\s+down|nearly\s+went\s+down|had\s+to\s+(?:run|bail|teleport|map)|"
+    r"hurt|hit\s+hard|that\s+was\s+close|that\s+got\s+ugly"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def recent_combat_alerts(limit: int = 6) -> list[dict[str, Any]]:
+    combat_alerts: list[dict[str, Any]] = []
+    for alert in list(world_state.recent_alerts)[-limit:]:
+        event_type = str(alert.get("event_type") or "").lower()
+        alert_type = str(alert.get("alert_type") or "").lower()
+        if event_type in {"party_member_down", "party_defeated"} or alert_type in {
+            "under_attack",
+            "danger_spike",
+            "combat_started",
+            "party_member_down",
+        }:
+            combat_alerts.append(alert)
+    return combat_alerts
+
+
+def is_recent_combat_reflection_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    if not lowered:
+        return False
+    if "charr" in lowered and re.search(r"\b(?:hurt|hit\s+hard|hit|rough|tough)\b", lowered):
+        return True
+    return bool(RECENT_COMBAT_REFLECTION_PATTERN.search(lowered) and recent_combat_alerts())
+
+
+def azele_recent_combat_reply(event: TelemetryEvent) -> str | None:
+    message = readable_game_text(event.message).lower()
+    if not is_recent_combat_reflection_context(message):
+        return None
+    alerts = recent_combat_alerts()
+    had_down = any(str(alert.get("event_type") or "").lower() == "party_member_down" for alert in alerts)
+    in_city = "ascalon city" in map_area_label(event).lower()
+
+    if "charr" in message:
+        if had_down and in_city:
+            return "Yeah. Those Charr hit hard. Pulling back to Ascalon City was the right call."
+        if had_down:
+            return "Yeah. Those Charr hit hard. We need cleaner pulls before we push them again."
+        return "They do. We need cleaner pulls and no heroics before we go back at them."
+    if had_down and in_city:
+        return "Yeah. That got too close. Coming back to Ascalon City was the right call."
+    if had_down:
+        return "Yeah. That got too close. Next time we pull slower and bail sooner."
+    return "Yeah. That was rough. Give me a breath, then we can decide our next move."
+
 
 def azele_charr_intent_reply(event: TelemetryEvent) -> str | None:
     if event.persona.strip().lower() != "azele":
@@ -3173,6 +3229,8 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
 
 
 def azele_fast_reply(event: TelemetryEvent) -> str:
+    if combat_reply := azele_recent_combat_reply(event):
+        return combat_reply
     if charr_reply := azele_charr_intent_reply(event):
         return charr_reply
     if gw1_reply := azele_gw1_context_reply(resolve_gw1_context(event, recent_conversation_context(limit=6)), event):
