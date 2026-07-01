@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -22,8 +23,9 @@ class _FakeSupabase:
 
 
 class _FakeReplyTable:
-    def __init__(self):
+    def __init__(self, rows=None):
         self.updated_ids = []
+        self.rows = rows
 
     def select(self, _columns):
         return self
@@ -52,7 +54,9 @@ class _FakeReplyTable:
             "Response",
             (),
             {
-                "data": [
+                "data": self.rows
+                if self.rows is not None
+                else [
                     {
                         "id": 10,
                         "persona": "A Test",
@@ -75,8 +79,8 @@ class _FakeReplyTable:
 
 
 class _FakeReplySupabase:
-    def __init__(self):
-        self.reply_table = _FakeReplyTable()
+    def __init__(self, rows=None):
+        self.reply_table = _FakeReplyTable(rows)
 
     def table(self, _name):
         return self.reply_table
@@ -208,6 +212,37 @@ class WindowsBridgeTests(unittest.TestCase):
         self.assertEqual(body["reply_items"][0]["reply_delay_ms"], 0)
         self.assertEqual(body["reply_items"][0]["post_play_delay_ms"], 6200)
         self.assertEqual(fake.reply_table.updated_ids, [10])
+
+    def test_get_replies_drops_stale_unconsumed_reply_backlog(self) -> None:
+        client = TestClient(app)
+        now = datetime.now(timezone.utc)
+        fake = _FakeReplySupabase(
+            [
+                {
+                    "id": 20,
+                    "created_at": (now - timedelta(minutes=3)).isoformat(),
+                    "persona": "A Test",
+                    "message": "Old line one.",
+                    "channel": "party",
+                    "payload": {"session_id": "local-playtest"},
+                },
+                {
+                    "id": 21,
+                    "created_at": (now - timedelta(minutes=2)).isoformat(),
+                    "persona": "A Test",
+                    "message": "Old line two.",
+                    "channel": "party",
+                    "payload": {"session_id": "local-playtest"},
+                },
+            ]
+        )
+
+        with patch("backend.windows_bridge.app._client", return_value=fake):
+            response = client.get("/v1/playmate/replies?persona=A%20Test&session_id=local-playtest")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"replies": [], "reply_items": []})
+        self.assertEqual(fake.reply_table.updated_ids, [20, 21])
 
 
 if __name__ == "__main__":

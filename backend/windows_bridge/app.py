@@ -55,6 +55,25 @@ def _strip_invalid_json_control_chars(text: str) -> str:
     return "".join(ch for ch in text if ch in "\t\n\r" or ord(ch) >= 0x20)
 
 
+def _parse_created_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _is_fresh_reply(row: CompanionReplyRow, now: datetime) -> bool:
+    created_at = _parse_created_at(row.created_at)
+    if created_at is None:
+        return True
+    age = (now - created_at).total_seconds()
+    return -5.0 <= age <= settings.reply_max_age_seconds
+
+
 async def _event_from_request(request: Request) -> TelemetryEvent:
     raw = await request.body()
     text = raw.decode("utf-8", errors="replace")
@@ -107,11 +126,17 @@ def get_replies(persona: str | None = None, session_id: str | None = None, limit
         rows = [CompanionReplyRow.model_validate(row) for row in response.data or []]
         if session_id:
             rows = [row for row in rows if row.payload_session_id() == session_id]
+        now = datetime.now(timezone.utc)
+        fresh_rows = [row for row in rows if _is_fresh_reply(row, now)]
+        fresh_ids = {row.id for row in fresh_rows}
+        stale_rows = [row for row in rows if row.id not in fresh_ids]
         if rows:
             consumed_at = datetime.now(timezone.utc).isoformat()
             ids = [row.id for row in rows]
             client.table(COMPANION_REPLIES_TABLE).update({"consumed_at": consumed_at}).in_("id", ids).execute()
-        reply_items = [row.to_reply_item() for row in rows]
+        if stale_rows:
+            print(f"Windows bridge dropped {len(stale_rows)} stale companion replies.", flush=True)
+        reply_items = [row.to_reply_item() for row in fresh_rows]
         return RepliesResponse(replies=[item.message for item in reply_items], reply_items=reply_items)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

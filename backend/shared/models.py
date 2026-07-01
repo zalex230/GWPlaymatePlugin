@@ -178,6 +178,7 @@ class CompanionReplyRow(BaseModel):
     channel: str = "party"
     session_id: str | None = None
     urgency: str | None = None
+    created_at: str | None = None
     consumed_at: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
