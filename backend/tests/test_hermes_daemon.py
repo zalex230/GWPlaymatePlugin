@@ -2927,6 +2927,79 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(any(word in decision.response.lower() for word in ["down", "handled", "breathing"]))
         self.assertLessEqual(len(decision.response), 119)
 
+    def test_short_ack_does_not_repeat_scourge_context_reply(self) -> None:
+        recent_reply_texts.append("Yeah, another run. Devona wants Maz Scourgeheart stopped, and honestly so do I.")
+
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "id": 1930,
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "agreed",
+                    "payload": {"event_type": "player_chat", "persona": "Azele", "session_id": "local-playtest"},
+                }
+            )
+        )
+
+        self.assertTrue(decision.should_speak)
+        self.assertNotIn("Maz Scourgeheart", decision.response)
+        self.assertNotEqual(
+            decision.response,
+            "Yeah, another run. Devona wants Maz Scourgeheart stopped, and honestly so do I.",
+        )
+
+    def test_recent_reply_lines_queries_supabase_even_with_local_buffer(self) -> None:
+        original_settings = hermes_daemon.settings
+        original_create_client = hermes_daemon.create_supabase_client
+        recent_reply_texts.extend(["local one", "local two", "local three"])
+
+        class FakeQuery:
+            def select(self, *_args: object) -> "FakeQuery":
+                return self
+
+            def eq(self, *_args: object) -> "FakeQuery":
+                return self
+
+            def order(self, *_args: object, **_kwargs: object) -> "FakeQuery":
+                return self
+
+            def limit(self, *_args: object) -> "FakeQuery":
+                return self
+
+            def execute(self) -> object:
+                class Response:
+                    data = [{"message": "Yeah, another run. Devona wants Maz Scourgeheart stopped, and honestly so do I."}]
+
+                return Response()
+
+        class FakeClient:
+            def table(self, _table_name: str) -> FakeQuery:
+                return FakeQuery()
+
+        try:
+            hermes_daemon.settings = replace(
+                original_settings,
+                supabase_url="https://example.supabase.co",
+                supabase_service_key="service-key",
+            )
+            hermes_daemon.create_supabase_client = lambda settings: FakeClient()
+
+            lines = hermes_daemon.recent_reply_lines(limit=8)
+
+            self.assertIn(
+                "Yeah, another run. Devona wants Maz Scourgeheart stopped, and honestly so do I.",
+                lines,
+            )
+            self.assertTrue(
+                hermes_daemon.is_too_similar_to_recent_replies(
+                    "Yeah, another run. Devona wants Maz Scourgeheart stopped, and honestly so do I."
+                )
+            )
+        finally:
+            hermes_daemon.settings = original_settings
+            hermes_daemon.create_supabase_client = original_create_client
+
     def test_environment_alert_preserves_damage_metadata(self) -> None:
         event = event_from_environment_alert(
             {

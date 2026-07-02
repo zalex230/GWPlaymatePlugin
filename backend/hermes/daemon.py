@@ -1887,7 +1887,7 @@ def should_ignore_radar_alert(event: TelemetryEvent) -> bool:
 
 def recent_reply_lines(limit: int = 8) -> list[str]:
     local_lines = list(recent_reply_texts)[-limit:]
-    if len(local_lines) >= min(limit, 3) or not _supabase_configured():
+    if not _supabase_configured():
         return local_lines
     lines: list[str] = []
     try:
@@ -2568,7 +2568,7 @@ RECENT_COMBAT_REFLECTION_PATTERN = re.compile(
     r"\b(?:"
     r"tough|rough|close\s+call|almost\s+died|nearly\s+died|barely\s+(?:made|survived)|"
     r"almost\s+went\s+down|nearly\s+went\s+down|had\s+to\s+(?:run|bail|teleport|map)|"
-    r"hurt|hit\s+hard|that\s+was\s+close|that\s+got\s+ugly"
+    r"hurt|ouch|not\s+so\s+easy|hit\s+hard|that\s+was\s+close|that\s+got\s+ugly"
     r")\b",
     re.IGNORECASE,
 )
@@ -2617,6 +2617,30 @@ def azele_recent_combat_reply(event: TelemetryEvent) -> str | None:
     if had_down:
         return "Yeah. That got too close. Next time we pull slower and bail sooner."
     return "Yeah. That was rough. Give me a breath, then we can decide our next move."
+
+
+def azele_simple_ack_reply(message: str) -> str | None:
+    cleaned = re.sub(r"\s+", " ", readable_game_text(message).lower()).strip(" .!,?")
+    if not cleaned:
+        return None
+    if re.fullmatch(r"(?:agreed|exactly|fair|true|right|yeah|yep|sure|okay|ok|cool)", cleaned):
+        return first_fresh_reply(
+            [
+                "Good. Then we keep it careful.",
+                "Yeah. Same page, then.",
+                "Alright. Your call on the next move.",
+                "Fair. I’m with you.",
+            ]
+        )
+    if re.fullmatch(r"(?:wow )?yes ma'?am|yes ma'?am|ma'?am", cleaned):
+        return first_fresh_reply(
+            [
+                "Careful. I might get used to that.",
+                "That’s better. Keep moving.",
+                "Good answer. Now don’t make me regret liking it.",
+            ]
+        )
+    return None
 
 
 def azele_charr_intent_reply(event: TelemetryEvent) -> str | None:
@@ -3343,18 +3367,22 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
 
 
 def azele_fast_reply(event: TelemetryEvent) -> str:
+    message = (event.message or "").lower()
     if combat_reply := azele_recent_combat_reply(event):
         return combat_reply
-    if charr_reply := azele_charr_intent_reply(event):
-        return charr_reply
-    if gw1_reply := azele_gw1_context_reply(resolve_gw1_context(event, recent_conversation_context(limit=6)), event):
-        return gw1_reply
-    message = (event.message or "").lower()
-    quest = readable_game_text(event.active_quest_name)
     if is_player_checkin(message):
         return azele_player_checkin_reply(message)
     if clarification := azele_clarification_reply(message):
         return clarification
+    if contextual_followup := azele_contextual_followup_reply(message):
+        return contextual_followup
+    if simple_ack := azele_simple_ack_reply(message):
+        return simple_ack
+    if charr_reply := azele_charr_intent_reply(event):
+        return charr_reply
+    if gw1_reply := azele_gw1_context_reply(resolve_gw1_context(event, recent_conversation_context(limit=6)), event):
+        return gw1_reply
+    quest = readable_game_text(event.active_quest_name)
     if is_scourge_lfg_context(message):
         return azele_scourge_lfg_reply(message)
     if is_scourge_beneath_run_context(message, event):
@@ -3367,8 +3395,6 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return azele_tunnel_plan_reply(message)
     if is_ldoa_context(message):
         return azele_ldoa_reply(message)
-    if contextual_followup := azele_contextual_followup_reply(message):
-        return contextual_followup
     if is_alcohol_consumable_context(message):
         return first_fresh_reply(
             [
