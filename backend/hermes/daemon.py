@@ -2032,11 +2032,34 @@ def is_too_similar_to_recent_replies(reply: str) -> bool:
     return False
 
 
+SCOURGE_REPLY_TOPIC_PATTERN = re.compile(r"\b(?:scourge|maz|forsaken tunnels|devona wants maz|elemental army)\b", re.IGNORECASE)
+
+
+def repeats_recent_reply_topic(reply: str) -> bool:
+    if not SCOURGE_REPLY_TOPIC_PATTERN.search(reply or ""):
+        return False
+    return any(SCOURGE_REPLY_TOPIC_PATTERN.search(previous or "") for previous in recent_reply_lines(limit=8))
+
+
+def is_duplicate_direct_reply(reply: str) -> bool:
+    return is_too_similar_to_recent_replies(reply) or repeats_recent_reply_topic(reply)
+
+
 def first_fresh_reply(candidates: list[str]) -> str:
     for candidate in candidates:
         if not is_too_similar_to_recent_replies(candidate):
             return candidate
     return candidates[-1] if candidates else ""
+
+
+def duplicate_recovery_reply() -> str:
+    return first_fresh_reply(
+        [
+            "I’m repeating myself. Resetting.",
+            "Right, I got stuck on that thought. New line.",
+            "Fair. I heard myself loop. I’m with you now.",
+        ]
+    )
 
 
 def last_azele_reply_text() -> str:
@@ -2127,7 +2150,7 @@ def azele_contextual_followup_reply(message: str) -> str | None:
         or is_item_space_context(message)
         or is_level_charr_context(message)
         or is_level_up_congratulations_context(message)
-        or re.search(r"\b(?:charr|level|leveled|levelled|ding|stage|althea|iris|irises|flowers?|skirts?|mini\s*skirts?|leggings?|krytan|armor|armour|outfit|upgrade)\b", message)
+        or re.search(r"\b(?:scourge|maz|tun+e?ls?|charr|level|leveled|levelled|ding|stage|althea|iris|irises|flowers?|skirts?|mini\s*skirts?|leggings?|krytan|armor|armour|outfit|upgrade)\b", message)
     ):
         return None
 
@@ -2623,6 +2646,14 @@ def azele_simple_ack_reply(message: str) -> str | None:
     cleaned = re.sub(r"\s+", " ", readable_game_text(message).lower()).strip(" .!,?")
     if not cleaned:
         return None
+    if re.fullmatch(r"(?:let'?s go|lets go|ready|go|ready now|i'?m ready|im ready)", cleaned):
+        return first_fresh_reply(
+            [
+                "Ready. Stay close.",
+                "Yeah. Let’s go.",
+                "Go on. I’m right behind you.",
+            ]
+        )
     if re.fullmatch(r"(?:agreed|exactly|fair|true|right|yeah|yep|sure|okay|ok|cool)", cleaned):
         return first_fresh_reply(
             [
@@ -2630,6 +2661,14 @@ def azele_simple_ack_reply(message: str) -> str | None:
                 "Yeah. Same page, then.",
                 "Alright. Your call on the next move.",
                 "Fair. I’m with you.",
+            ]
+        )
+    if re.search(r"\b(?:heard you|first time|you already said|said that|repeating|repeat|same line|stop looping|relax)\b", cleaned):
+        return first_fresh_reply(
+            [
+                "Yeah, I heard myself too. I’ll stop looping.",
+                "Right. I’m repeating myself. Resetting now.",
+                "Fair. I got stuck on that thought. I’m with you.",
             ]
         )
     if re.fullmatch(r"(?:wow )?yes ma'?am|yes ma'?am|ma'?am", cleaned):
@@ -2705,9 +2744,11 @@ def azele_scourge_lfg_reply(message: str) -> str:
 
 def is_scourge_beneath_run_context(message: str, event: TelemetryEvent | None = None) -> bool:
     lowered = readable_game_text(message).lower()
-    if re.search(r"\b(?:the\s+)?scourge\s+(?:beneath|below)\b|\bmaz\s+scourgeheart\b", lowered):
+    if re.search(r"\b(?:the\s+)?scou?rge\s+(?:beneath|below)\b|\bmaz\s+scourgeheart\b", lowered):
         return True
-    if not re.search(r"\b(?:another\s+)?tunnel\s+run\b|\brun\s+(?:the\s+)?tunnels?\b|\btunnels?\s+again\b", lowered):
+    if event is not None and re.search(r"\b(?:do|run|another|wanna|want|go|try|scou?rge)\b.*\bscou?rge\b|\bscou?rge\b.*\b(?:run|again|wanna|want|go|try)\b", lowered):
+        return True
+    if not re.search(r"\b(?:another\s+)?tun+e?ls?\s+run\b|\brun\s+(?:the\s+)?tun+e?ls?\b|\btun+e?ls?\s+again\b", lowered):
         return False
     if event is None:
         return False
@@ -2865,6 +2906,16 @@ def azele_gw1_context_reply(context: ResolvedGameContext, event: TelemetryEvent)
         return None
     message = readable_game_text(event.message).lower()
     if context.entry_id == "quest.scourge_beneath":
+        if re.search(r"\bmaz\b", message) and not is_scourge_beneath_run_context(message, event):
+            return first_fresh_reply(
+                [
+                    "Maz Scourgeheart. The necromancer stirring up trouble in the tunnels.",
+                    "Maz. The one Devona wants stopped before that elemental mess gets worse.",
+                    "Maz Scourgeheart, down in the Forsaken Tunnels. Not exactly harmless.",
+                ]
+            )
+        if not is_scourge_beneath_run_context(message, event):
+            return None
         return azele_scourge_beneath_reply(message)
     if context.entry_id == "title.ldoa":
         return azele_ldoa_reply(message)
@@ -3374,6 +3425,10 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return azele_player_checkin_reply(message)
     if clarification := azele_clarification_reply(message):
         return clarification
+    if is_scourge_lfg_context(message):
+        return azele_scourge_lfg_reply(message)
+    if is_scourge_beneath_run_context(message, event):
+        return azele_scourge_beneath_reply(message)
     if contextual_followup := azele_contextual_followup_reply(message):
         return contextual_followup
     if simple_ack := azele_simple_ack_reply(message):
@@ -3383,10 +3438,6 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
     if gw1_reply := azele_gw1_context_reply(resolve_gw1_context(event, recent_conversation_context(limit=6)), event):
         return gw1_reply
     quest = readable_game_text(event.active_quest_name)
-    if is_scourge_lfg_context(message):
-        return azele_scourge_lfg_reply(message)
-    if is_scourge_beneath_run_context(message, event):
-        return azele_scourge_beneath_reply(message)
     if is_pet_evolution_context(message):
         return azele_pet_evolution_reply(message)
     if is_recent_failure_bailout_context(message):
@@ -4314,6 +4365,19 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
         session_id=session_id,
         trigger_log_id=record_id if event.event_type != "environment_alert" else None,
     )
+    if is_direct_player_chat and any(is_duplicate_direct_reply(reply.message) for reply in replies):
+        recovery = HermesDecision(
+            should_speak=True,
+            channel_override="CHANNEL_PARTY",
+            urgency="NORMAL",
+            response=clamp_gw_chat_line(duplicate_recovery_reply()),
+        )
+        replies = replies_from_decision(
+            recovery,
+            persona=persona,
+            session_id=session_id,
+            trigger_log_id=record_id,
+        )
     if not replies:
         return []
     if event.event_type == "environment_alert" and isinstance(record_id, int):

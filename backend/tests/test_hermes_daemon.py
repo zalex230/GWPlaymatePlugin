@@ -2949,6 +2949,68 @@ class HermesDaemonTests(unittest.TestCase):
             "Yeah, another run. Devona wants Maz Scourgeheart stopped, and honestly so do I.",
         )
 
+    def test_active_scourge_quest_does_not_hijack_unrelated_player_chat(self) -> None:
+        repeated = "Yeah, another run. Devona wants Maz Scourgeheart stopped, and honestly so do I."
+        recent_reply_texts.append(repeated)
+        messages = {
+            "lets go": "Ready",
+            "maz, huh?": "Maz",
+            "i heard you the first time": "loop",
+            "relax, azele": "loop",
+        }
+
+        for message, expected_fragment in messages.items():
+            with self.subTest(message=message):
+                decision = fallback_rule_decision(
+                    event_from_game_log(
+                        {
+                            "sender": "Player",
+                            "channel": "party",
+                            "message": message,
+                            "active_quest_id": 1456,
+                            "active_quest_name": "A Scourge Beneath",
+                            "payload": {
+                                "event_type": "player_chat",
+                                "persona": "Azele",
+                                "session_id": "local-playtest",
+                                "active_quest_id": 1456,
+                                "active_quest_name": "A Scourge Beneath",
+                            },
+                        }
+                    )
+                )
+
+                self.assertTrue(decision.should_speak)
+                self.assertNotEqual(decision.response, repeated)
+                self.assertIn(expected_fragment.lower(), decision.response.lower())
+
+    def test_process_event_replaces_direct_player_duplicate_reply(self) -> None:
+        repeated = "Yeah, another run. Devona wants Maz Scourgeheart stopped, and honestly so do I."
+        recent_reply_texts.append(repeated)
+        event = event_from_game_log(
+            {
+                "id": 1935,
+                "sender": "Player",
+                "channel": "party",
+                "message": "another tunnel run",
+                "active_quest_id": 1456,
+                "active_quest_name": "A Scourge Beneath",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "session_id": "local-playtest",
+                    "active_quest_id": 1456,
+                    "active_quest_name": "A Scourge Beneath",
+                },
+            }
+        )
+
+        replies = process_event(event, record_id=1935, use_ollama=False)
+
+        self.assertEqual(len(replies), 1)
+        self.assertNotEqual(replies[0].message, repeated)
+        self.assertTrue(any(word in replies[0].message.lower() for word in ["reset", "stuck", "loop"]))
+
     def test_recent_reply_lines_queries_supabase_even_with_local_buffer(self) -> None:
         original_settings = hermes_daemon.settings
         original_create_client = hermes_daemon.create_supabase_client
