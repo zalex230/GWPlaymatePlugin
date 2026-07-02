@@ -2049,6 +2049,7 @@ void PlaymatePlugin::OnAgentState(GW::HookStatus*, GW::Packet::StoC::AgentState*
     constexpr uint32_t dead_state_bit = 0x10;
     constexpr uint32_t hex_state_bit = 0x800;
     const bool is_dead = (packet->state & dead_state_bit) != 0;
+    const bool is_controlled_character = IsControlledCharacterAgent(packet->agent_id);
     bool was_dead = false;
     bool gained_condition = false;
     bool gained_hex = false;
@@ -2062,7 +2063,7 @@ void PlaymatePlugin::OnAgentState(GW::HookStatus*, GW::Packet::StoC::AgentState*
         active_plugin->last_agent_states_[packet->agent_id] = packet->state;
     }
 
-    if (!is_dead && (gained_condition || gained_hex)) {
+    if (is_controlled_character && !is_dead && (gained_condition || gained_hex)) {
         std::string effect_name;
         if (const GW::Agent* agent = GW::Agents::GetAgentByID(packet->agent_id)) {
             if (const GW::AgentLiving* living = agent->GetAsAgentLiving()) {
@@ -2072,7 +2073,7 @@ void PlaymatePlugin::OnAgentState(GW::HookStatus*, GW::Packet::StoC::AgentState*
 
         TelemetryEvent event;
         event.event_type = "environment_alert";
-        event.message = gained_hex ? "Party member is hexed." : "Party member has a condition.";
+        event.message = gained_hex ? "Controlled character is hexed." : "Controlled character has a condition.";
         event.agent_id = packet->agent_id;
         event.agent_name = PartyAgentName(packet->agent_id);
         event.alert_type = "status_effect";
