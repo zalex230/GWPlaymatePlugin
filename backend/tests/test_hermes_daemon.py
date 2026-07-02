@@ -393,6 +393,34 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(all(len(line) <= hermes_daemon.MAX_GW_CHAT_CHARS for line in lines))
         self.assertIn("past the gates together", " ".join(lines))
 
+    def test_split_gw_chat_lines_allows_more_than_three_lines(self) -> None:
+        text = (
+            "First, we get a party together without rushing the gate. "
+            "Second, we check who can hold the front line if the Charr push back. "
+            "Third, we keep Devona close because she hits hard but still needs cover. "
+            "Fourth, if it turns bad, we pull back before anyone drops. "
+            "Fifth, after that, we can try the tunnel again."
+        )
+
+        lines = hermes_daemon.split_gw_chat_lines(text)
+
+        self.assertGreater(len(lines), 3)
+        self.assertLessEqual(len(lines), hermes_daemon.MAX_GW_REPLY_LINES)
+        self.assertTrue(all(len(line) <= hermes_daemon.MAX_GW_CHAT_CHARS for line in lines))
+        self.assertIn("try the tunnel again", " ".join(lines))
+
+    def test_split_gw_chat_lines_rebalances_dangling_boundary_words(self) -> None:
+        text = (
+            "Yeah, let's go grab some gear and hit them hard at Piken Square first thing tomorrow morning while we're still fresh on "
+            "Ascalon soil. Your call where exactly though."
+        )
+
+        lines = hermes_daemon.split_gw_chat_lines(text)
+
+        self.assertGreater(len(lines), 1)
+        self.assertFalse(lines[0].endswith(" on"))
+        self.assertTrue(all(len(line) <= hermes_daemon.MAX_GW_CHAT_CHARS for line in lines))
+
     def test_multi_line_replies_include_delay_metadata(self) -> None:
         decision = hermes_daemon.HermesDecision(
             should_speak=True,
@@ -1774,6 +1802,11 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(
             model_reply_has_bad_shape(
                 "A melandru stalker sounds better for her though, maybe she'll actually use that instead of just hoarding them like Devona does with everything else anyway."
+            )
+        )
+        self.assertTrue(
+            model_reply_has_bad_shape(
+                "Yeah, let's go grab some gear and hit them hard at Piken Square first thing tomorrow morning while we're still fresh on Ascalon soil. Your call where exactly though; north of the"
             )
         )
         self.assertFalse(model_reply_has_bad_shape("I know. Still nice to hear."))

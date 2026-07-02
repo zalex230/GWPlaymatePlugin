@@ -48,7 +48,7 @@ world_state = LiveWorldState(
 recent_reply_texts: deque[str] = deque(maxlen=12)
 map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
-MAX_GW_REPLY_LINES = 3
+MAX_GW_REPLY_LINES = 5
 MULTI_MESSAGE_MIN_REPLY_DELAY_MS = 3200
 MULTI_MESSAGE_MAX_REPLY_DELAY_MS = 9000
 VISIBLE_ENEMY_RANGE = 900.0
@@ -171,7 +171,11 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
 )
 FILLER_OPENER_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]+", re.IGNORECASE)
 DANGLING_REPLY_ENDING_PATTERN = re.compile(
-    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|what|who|where|why|how)$",
+    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)$",
+    re.IGNORECASE,
+)
+DANGLING_SPLIT_ENDING_PATTERN = re.compile(
+    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|on|in|at|into|over|under|near|toward|towards)$",
     re.IGNORECASE,
 )
 MEMORY_MEANINGFUL_EVENT_TYPES = {
@@ -1656,6 +1660,25 @@ def clamp_gw_chat_line(text: str) -> str:
     return clipped.rstrip(" ,;:")
 
 
+def rebalance_dangling_chat_splits(lines: list[str]) -> list[str]:
+    balanced = [line.strip() for line in lines if line.strip()]
+    for index in range(len(balanced) - 1):
+        line = balanced[index]
+        next_line = balanced[index + 1]
+        words = line.split()
+        if len(words) < 2:
+            continue
+        last_word = words[-1].strip(" ,;:")
+        if not DANGLING_SPLIT_ENDING_PATTERN.search(last_word):
+            continue
+        candidate_next = f"{last_word} {next_line}".strip()
+        if len(candidate_next) > MAX_GW_CHAT_CHARS:
+            continue
+        balanced[index] = " ".join(words[:-1]).rstrip(" ,;:")
+        balanced[index + 1] = candidate_next
+    return [line for line in balanced if line]
+
+
 def split_gw_chat_lines(text: str, *, max_lines: int = MAX_GW_REPLY_LINES) -> list[str]:
     cleaned = re.sub(r"\s+", " ", text).strip()
     if not cleaned:
@@ -1710,7 +1733,7 @@ def split_gw_chat_lines(text: str, *, max_lines: int = MAX_GW_REPLY_LINES) -> li
     if current and len(lines) < max_lines:
         lines.append(current)
 
-    return [line for line in lines[:max_lines] if line]
+    return rebalance_dangling_chat_splits(lines[:max_lines])
 
 
 def estimate_reply_delay_ms(text: str) -> int:
@@ -1732,10 +1755,18 @@ def model_reply_has_bad_shape(reply: str) -> bool:
         return True
     if DANGLING_REPLY_ENDING_PATTERN.search(cleaned.rstrip(" .!?")):
         return True
+    if re.search(r"\binstead\s+of\s+just\b.{20,}\banyway\b", cleaned, re.IGNORECASE):
+        return True
     if len(cleaned) > MAX_GW_CHAT_CHARS and not re.search(r"[.!?]", cleaned):
         return True
-    for line in split_gw_chat_lines(cleaned):
-        if DANGLING_REPLY_ENDING_PATTERN.search(line.rstrip(" .!?")):
+    lines = split_gw_chat_lines(cleaned)
+    if re.sub(r"\s+", " ", " ".join(lines)).strip() != cleaned:
+        return True
+    for index, line in enumerate(lines):
+        stripped = line.rstrip(" .!?")
+        if DANGLING_REPLY_ENDING_PATTERN.search(stripped):
+            return True
+        if index < len(lines) - 1 and DANGLING_SPLIT_ENDING_PATTERN.search(stripped):
             return True
     return False
 
