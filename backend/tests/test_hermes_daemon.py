@@ -48,6 +48,7 @@ from backend.hermes_daemon.daemon import (
     reply_expression,
     sanitize_memory_for_prompt,
     should_flush_memory_buffer,
+    should_use_direct_character_reply,
     should_use_fast_fallback_before_ollama,
     should_use_ollama_for_event,
     split_spoken_expression_label,
@@ -906,6 +907,65 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(reply.should_speak)
         self.assertRegex(reply.response.lower(), r"going|alright|good|restless|watching|with you")
         self.assertNotIn("what are we doing", reply.response.lower())
+
+    def test_fallback_comments_on_social_party_banter(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "we had our stat in the middle of the week (canadian). we should've done what the americans did",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 147,
+                    "map_name": "The Northlands",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"holiday|week|americans|countries|scheduling|rest")
+        self.assertNotIn("what are we doing", reply.response.lower())
+
+    def test_party_chat_log_can_receive_social_banter_reply(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Other Player",
+                "channel": "party",
+                "message": "midweek holidays are awkward",
+                "metadata": {
+                    "event_type": "chat_log",
+                    "persona": "Azele",
+                    "map_id": 147,
+                    "map_name": "The Northlands",
+                    "session_id": "party-chat-test",
+                },
+            }
+        )
+
+        self.assertTrue(should_use_ollama_for_event(event))
+        self.assertTrue(should_use_direct_character_reply(event))
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"holiday|week|annoy|badly|awkward|useful")
+        self.assertNotIn("what are we doing", reply.response.lower())
+
+    def test_model_reply_rejects_generic_checkin_for_social_banter(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "we had our stat in the middle of the week (canadian). we should've done what the americans did",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("Yeah, I’m here. What are we doing?", event)
 
     def test_fallback_acknowledges_odd_previous_generic_response(self) -> None:
         recent_reply_texts.append("Yeah, I’m here. What are we doing?")
@@ -2551,6 +2611,7 @@ class HermesDaemonTests(unittest.TestCase):
             )
 
     def test_item_drop_allows_purple_loot_reference(self) -> None:
+        original_settings = hermes_daemon.settings
         event = event_from_game_log(
             {
                 "sender": "Loot",
@@ -2560,10 +2621,14 @@ class HermesDaemonTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(
-            validate_model_reply("Purple out here? That is worth a look. What did it roll?", event),
-            "Purple out here? That is worth a look. What did it roll?",
-        )
+        try:
+            hermes_daemon.settings = replace(original_settings, supabase_url="", supabase_service_key="")
+            self.assertEqual(
+                validate_model_reply("Purple out here? That is worth a look. What did it roll?", event),
+                "Purple out here? That is worth a look. What did it roll?",
+            )
+        finally:
+            hermes_daemon.settings = original_settings
 
     def test_snapshot_ambient_quip_respects_cooldown(self) -> None:
         event = event_from_game_log(

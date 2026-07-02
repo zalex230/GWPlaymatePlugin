@@ -1811,7 +1811,7 @@ def replies_from_decision(
 
 
 def should_use_direct_character_reply(event: TelemetryEvent) -> bool:
-    if event.event_type == "player_chat" and event.channel == "party":
+    if event.event_type in {"player_chat", "chat_log"} and event.channel == "party":
         return True
     if is_npc_dialogue_event(event):
         return True
@@ -1826,7 +1826,7 @@ def should_use_direct_character_reply(event: TelemetryEvent) -> bool:
 
 def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
     return (
-        (event.event_type == "player_chat" and event.channel == "party")
+        (event.event_type in {"player_chat", "chat_log"} and event.channel == "party")
         or is_npc_dialogue_event(event)
         or event.event_type in MAP_COMMENT_EVENT_TYPES
         or event.event_type == "item_drop"
@@ -2596,6 +2596,10 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return not re.search(r"\b(?:pet|dire|hearty|evol|develop|level\s*11|level|sturdy|harder)\b", reply, re.IGNORECASE)
     if is_devona_pet_context(message):
         return not re.search(r"\b(?:devona|pet|ranger|stalker|melandru|warthog|animal)\b", reply, re.IGNORECASE)
+    if is_social_banter_context(message):
+        return bool(
+            re.search(r"\b(?:what are we doing|what'?s up|i'?m here|i’m here|i'?m listening|i’m listening)\b", reply, re.IGNORECASE)
+        )
     if is_red_iris_bag_context(message):
         return not re.search(r"\b(?:iris|irises|flower|bag|slot|space|nicholas|pack)\b", reply, re.IGNORECASE)
     if is_item_space_context(message):
@@ -2710,6 +2714,54 @@ def azele_simple_ack_reply(message: str) -> str | None:
             ]
         )
     return None
+
+
+def is_social_banter_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    if not lowered:
+        return False
+    return bool(
+        re.search(
+            r"\b(?:stat(?:utory)?\s+holidays?|stat\s+in|holidays?|midweek|weekend|canadian|canada|americans?|youtube|"
+            r"people\s+on\s+youtube|real\s+life|work\s+week|middle\s+of\s+the\s+week|long\s+weekend)\b",
+            lowered,
+        )
+    )
+
+
+def azele_social_banter_reply(message: str) -> str:
+    lowered = readable_game_text(message).lower()
+    if re.search(r"\b(?:stat(?:utory)?\s+holidays?|stat\s+in|holidays?|midweek|weekend|middle\s+of\s+the\s+week|long\s+weekend)\b", lowered):
+        return first_fresh_reply(
+            [
+                "A holiday in the middle of the week sounds like someone planned it to annoy you.",
+                "So you got the awkward holiday instead of the useful long weekend. That feels rude.",
+                "I only understand half of that, but a midweek holiday sounds badly placed.",
+            ]
+        )
+    if re.search(r"\b(?:canadian|canada|americans?)\b", lowered):
+        return first_fresh_reply(
+            [
+                "I do not know your countries, but if their version gave a longer rest, I support stealing it.",
+                "If the Americans got the better break, then yes, you should have copied them.",
+                "That sounds like politics dressed up as scheduling. I would complain too.",
+            ]
+        )
+    if re.search(r"\b(?:youtube|people\s+on\s+youtube)\b", lowered):
+        return first_fresh_reply(
+            [
+                "If they want to know me, they can start with the part where I keep you alive.",
+                "Tell YouTube I am very normal and not at all judging your route choices.",
+                "People watching us? Fine. Then try not to make me look reckless.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "I caught enough of that to have an opinion, which is dangerous.",
+            "That sounds like one of your outside-world problems. I am listening, though.",
+            "I do not fully understand it, but I can tell you are making a point.",
+        ]
+    )
 
 
 def azele_charr_intent_reply(event: TelemetryEvent) -> str | None:
@@ -3319,7 +3371,7 @@ def decide_with_ollama(event: TelemetryEvent, *, record_id: int | None = None) -
 
 
 def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
-    if event.event_type == "player_chat" and event.channel == "party":
+    if event.event_type in {"player_chat", "chat_log"} and event.channel == "party":
         persona = event.persona.strip()
         if persona.lower() == "azele":
             response = azele_fast_reply(event)
@@ -3451,6 +3503,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
     message = (event.message or "").lower()
     if combat_reply := azele_recent_combat_reply(event):
         return combat_reply
+    if social_reply := (azele_social_banter_reply(message) if is_social_banter_context(message) else None):
+        return social_reply
     if is_player_checkin(message):
         return azele_player_checkin_reply(message)
     if clarification := azele_clarification_reply(message):
@@ -4303,6 +4357,7 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
         player_chat_at_generation_start = world_state.last_player_chat_at
 
         is_direct_player_chat = event.event_type == "player_chat" and event.channel == "party"
+        is_party_chat_log = event.event_type == "chat_log" and event.channel == "party"
         is_emergency_alert = event.event_type == "environment_alert" and event.alert_type in EMERGENCY_ALERT_TYPES
         is_emergency_gameplay = event.event_type in {"party_member_down", "party_defeated"}
         is_unknown_quest_change = event.event_type == "active_quest_changed" and not readable_game_text(event.active_quest_name)
@@ -4356,7 +4411,7 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
             required_cooldown = AMBIENT_QUIP_MIN_SECONDS
         else:
             required_cooldown = settings.hermes_min_speak_seconds
-        if not is_map_entry and not is_direct_player_chat and not world_state.can_speak(required_cooldown):
+        if not is_map_entry and not (is_direct_player_chat or is_party_chat_log) and not world_state.can_speak(required_cooldown):
             should_speak_now = False
         elif not is_map_entry:
             should_speak_now = True
