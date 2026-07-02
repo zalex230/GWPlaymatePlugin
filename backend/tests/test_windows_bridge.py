@@ -158,6 +158,39 @@ class _FakeReplySupabase:
         return self.reply_table
 
 
+class _FakeGameLogTable:
+    def __init__(self, rows=None):
+        self.rows = rows or []
+
+    def select(self, _columns):
+        return self
+
+    def eq(self, _column, _value):
+        return self
+
+    def order(self, _column, desc=False):
+        return self
+
+    def limit(self, _limit):
+        return self
+
+    def execute(self):
+        return type("Response", (), {"data": self.rows})()
+
+
+class _ReplyAndGameLogSupabase:
+    def __init__(self, reply_rows=None, game_log_rows=None):
+        self.reply_table = _FakeReplyTable(reply_rows)
+        self.game_log_table = _FakeGameLogTable(game_log_rows)
+
+    def table(self, name):
+        if name == "companion_replies":
+            return self.reply_table
+        if name == "game_logs":
+            return self.game_log_table
+        return _FakeReplyTable([])
+
+
 class WindowsBridgeTests(unittest.TestCase):
     def test_health(self) -> None:
         client = TestClient(app)
@@ -390,6 +423,44 @@ class WindowsBridgeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"replies": [], "reply_items": []})
         self.assertEqual(fake.reply_table.updated_ids, [20, 21])
+
+    def test_get_replies_drops_reply_interrupted_by_newer_player_chat(self) -> None:
+        client = TestClient(app)
+        now = datetime.now(timezone.utc)
+        fake = _ReplyAndGameLogSupabase(
+            reply_rows=[
+                {
+                    "id": 30,
+                    "created_at": (now - timedelta(seconds=10)).isoformat(),
+                    "persona": "Azele",
+                    "message": "Old pending thought.",
+                    "channel": "party",
+                    "payload": {"session_id": "local-playtest"},
+                },
+                {
+                    "id": 31,
+                    "created_at": (now + timedelta(seconds=1)).isoformat(),
+                    "persona": "Azele",
+                    "message": "Fresh answer.",
+                    "channel": "party",
+                    "payload": {"session_id": "local-playtest"},
+                },
+            ],
+            game_log_rows=[
+                {
+                    "created_at": now.isoformat(),
+                    "channel": "party",
+                    "payload": {"event_type": "player_chat", "session_id": "local-playtest"},
+                }
+            ],
+        )
+
+        with patch("backend.windows_bridge.app._client", return_value=fake):
+            response = client.get("/v1/playmate/replies?persona=Azele&session_id=local-playtest")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["replies"], ["Fresh answer."])
+        self.assertEqual(fake.reply_table.updated_ids, [30, 31])
 
 
 if __name__ == "__main__":

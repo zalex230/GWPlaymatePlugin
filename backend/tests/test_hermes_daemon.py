@@ -2734,6 +2734,11 @@ class HermesDaemonTests(unittest.TestCase):
                             "id": 41,
                             "created_at": datetime.now(timezone.utc).isoformat(),
                             "payload": {"session_id": "session-1", "trigger_event_type": "map_loaded"},
+                        },
+                        {
+                            "id": 42,
+                            "created_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+                            "payload": {"session_id": "session-1", "trigger_event_type": "player_chat"},
                         }
                     ]
 
@@ -2753,8 +2758,8 @@ class HermesDaemonTests(unittest.TestCase):
 
             expired = expire_pending_replies_before_player_chat("Azele", "session-1")
 
-            self.assertEqual(expired, 1)
-            self.assertEqual(updated_ids, [41])
+            self.assertEqual(expired, 2)
+            self.assertEqual(updated_ids, [41, 42])
         finally:
             hermes_daemon.settings = original_settings
             hermes_daemon.create_supabase_client = original_create_client

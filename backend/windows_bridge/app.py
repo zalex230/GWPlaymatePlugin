@@ -111,6 +111,37 @@ def _is_fresh_reply(row: CompanionReplyRow, now: datetime) -> bool:
     return -5.0 <= age <= settings.reply_max_age_seconds
 
 
+def _latest_player_chat_at(client: Any, *, session_id: str | None = None) -> datetime | None:
+    response = (
+        client.table(GAME_LOGS_TABLE)
+        .select("created_at,channel,payload")
+        .eq("channel", "party")
+        .order("created_at", desc=True)
+        .limit(25)
+        .execute()
+    )
+    for row in response.data or []:
+        payload = row.get("payload") or {}
+        if payload.get("event_type") != "player_chat":
+            continue
+        row_session_id = str(payload.get("session_id") or "").strip()
+        if session_id and row_session_id and row_session_id != session_id:
+            continue
+        created_at = _parse_created_at(row.get("created_at"))
+        if created_at:
+            return created_at
+    return None
+
+
+def _is_interrupted_by_newer_player_chat(row: CompanionReplyRow, latest_player_chat_at: datetime | None) -> bool:
+    if latest_player_chat_at is None:
+        return False
+    created_at = _parse_created_at(row.created_at)
+    if created_at is None:
+        return False
+    return created_at <= latest_player_chat_at
+
+
 async def _event_from_request(request: Request) -> TelemetryEvent:
     raw = await request.body()
     text = raw.decode("utf-8", errors="replace")
@@ -164,7 +195,12 @@ def get_replies(persona: str | None = None, session_id: str | None = None, limit
         if session_id:
             rows = [row for row in rows if row.payload_session_id() == session_id]
         now = datetime.now(timezone.utc)
-        fresh_rows = [row for row in rows if _is_fresh_reply(row, now)]
+        latest_player_chat_at = _latest_player_chat_at(client, session_id=session_id)
+        fresh_rows = [
+            row
+            for row in rows
+            if _is_fresh_reply(row, now) and not _is_interrupted_by_newer_player_chat(row, latest_player_chat_at)
+        ]
         fresh_ids = {row.id for row in fresh_rows}
         stale_rows = [row for row in rows if row.id not in fresh_ids]
         if rows:

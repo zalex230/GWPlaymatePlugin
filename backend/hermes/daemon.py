@@ -57,7 +57,6 @@ AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 55.0
 AMBIENT_HEARTBEAT_POLL_SECONDS = 10.0
 AMBIENT_HEARTBEAT_ACTIVITY_SECONDS = 600.0
 UNCONSUMED_REPLY_STALE_SECONDS = 60.0
-PLAYER_CHAT_PENDING_REPLY_FLUSH_SECONDS = 45.0
 MAP_ENTRY_AFTER_PLAYER_CHAT_QUIET_SECONDS = 35.0
 PERSONA_MEMORY_DIR = Path(__file__).with_name("personas")
 GW_WIKI_API_URL = "https://wiki.guildwars.com/api.php"
@@ -4148,7 +4147,7 @@ def expire_pending_replies_before_player_chat(
     persona: str,
     session_id: str,
     *,
-    max_age_seconds: float = PLAYER_CHAT_PENDING_REPLY_FLUSH_SECONDS,
+    max_age_seconds: float | None = None,
 ) -> int:
     if not _supabase_configured():
         return 0
@@ -4176,7 +4175,9 @@ def expire_pending_replies_before_player_chat(
         if not created_at:
             continue
         age = (now - created_at).total_seconds()
-        if -5.0 <= age <= max_age_seconds:
+        if age < -5.0:
+            continue
+        if max_age_seconds is None or age <= max_age_seconds:
             expired_ids.append(row_id)
     if not expired_ids:
         return 0
