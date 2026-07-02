@@ -147,6 +147,7 @@ namespace {
         switch (channel) {
             case GW::Chat::CHANNEL_ALL:
             case GW::Chat::CHANNEL_EMOTE:
+            case GW::Chat::CHANNEL_GROUP:
             case GW::Chat::CHANNEL_GUILD:
             case GW::Chat::CHANNEL_ALLIANCE:
             case GW::Chat::CHANNEL_WHISPER:
@@ -173,6 +174,37 @@ namespace {
             }
         }
         return total == 0 || message[0] < 0x20 || message[0] > 0xFF || encoded * 4 > total;
+    }
+
+    std::string NormalizeChatForDedupe(const std::string& message)
+    {
+        std::ostringstream collapsed;
+        bool pending_space = false;
+        for (const unsigned char ch : message) {
+            if (std::isspace(ch)) {
+                pending_space = collapsed.tellp() > 0;
+                continue;
+            }
+            if (pending_space) {
+                collapsed << ' ';
+                pending_space = false;
+            }
+            collapsed << static_cast<char>(std::tolower(ch));
+        }
+        return collapsed.str();
+    }
+
+    bool IsDuplicateSentPartyChatLog(const std::string& chat_log_message, const std::string& sent_message)
+    {
+        if (sent_message.empty()) {
+            return false;
+        }
+        if (chat_log_message == sent_message) {
+            return true;
+        }
+        return chat_log_message.size() > sent_message.size()
+            && chat_log_message.ends_with(sent_message)
+            && std::isspace(static_cast<unsigned char>(chat_log_message[chat_log_message.size() - sent_message.size() - 1]));
     }
 
     std::string StripGwMarkup(std::string text)
@@ -1933,7 +1965,13 @@ void PlaymatePlugin::OnSendChat(GW::HookStatus*, const GW::UI::UIMessage message
         return;
     }
 
-    active_plugin->QueueTelemetry("player_chat", "Player", ChannelName(channel), PlayerMessageText(packet->message));
+    const std::string message_text = PlayerMessageText(packet->message);
+    {
+        std::lock_guard lock(active_plugin->recent_sent_party_chat_mutex_);
+        active_plugin->recent_sent_party_chat_ = NormalizeChatForDedupe(message_text);
+        active_plugin->recent_sent_party_chat_ms_ = MonotonicMs();
+    }
+    active_plugin->QueueTelemetry("player_chat", "Player", ChannelName(channel), message_text);
 }
 
 void PlaymatePlugin::OnWriteToChatLog(GW::HookStatus*, const GW::UI::UIMessage message_id, void* wparam, void*)
@@ -1948,15 +1986,23 @@ void PlaymatePlugin::OnWriteToChatLog(GW::HookStatus*, const GW::UI::UIMessage m
     }
 
     const auto channel = packet->channel;
-    if (channel == GW::Chat::CHANNEL_GROUP) {
-        return;
-    }
-
     const auto filtered_message = FilterChatLogMessage(channel, packet->message);
     if (!filtered_message) {
         return;
     }
-    active_plugin->QueueTelemetry("chat_log", "Game", ChannelName(channel), *filtered_message);
+    if (channel == GW::Chat::CHANNEL_GROUP) {
+        const std::string normalized_message = NormalizeChatForDedupe(*filtered_message);
+        std::lock_guard lock(active_plugin->recent_sent_party_chat_mutex_);
+        const uint64_t sent_ms = active_plugin->recent_sent_party_chat_ms_;
+        if (
+            sent_ms > 0
+            && MonotonicMs() - sent_ms < 2000
+            && IsDuplicateSentPartyChatLog(normalized_message, active_plugin->recent_sent_party_chat_)
+        ) {
+            return;
+        }
+    }
+    active_plugin->QueueTelemetry("chat_log", channel == GW::Chat::CHANNEL_GROUP ? "Party" : "Game", ChannelName(channel), *filtered_message);
 }
 
 void PlaymatePlugin::OnMapOrQuestEvent(GW::HookStatus*, const GW::UI::UIMessage message_id, void*, void*)

@@ -284,6 +284,9 @@ private:
     uint64_t waiting_since_ms_ = 0;
     uint64_t last_sent_ms_ = 0;
     uint64_t last_reply_ms_ = 0;
+    std::mutex recent_sent_party_chat_mutex_;
+    std::string recent_sent_party_chat_;
+    uint64_t recent_sent_party_chat_ms_ = 0;
 
     float snapshot_elapsed_ms_ = 0.0f;
     float radar_elapsed_ms_ = 0.0f;
