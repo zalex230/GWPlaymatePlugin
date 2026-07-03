@@ -776,7 +776,7 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex(reply.response.lower(), r"scourge|beneath|maz|scourgeheart|forsaken|devona|elemental")
         self.assertNotRegex(reply.response.lower(), r"one more detail|tell me what|could be|maybe")
 
-    def test_high_confidence_gw1_context_skips_slow_ollama_path(self) -> None:
+    def test_high_confidence_gw1_context_enriches_ollama_prompt_without_skipping(self) -> None:
         event = event_from_game_log(
             {
                 "sender": "Player",
@@ -792,7 +792,10 @@ class HermesDaemonTests(unittest.TestCase):
             }
         )
 
-        self.assertTrue(should_use_fast_fallback_before_ollama(event))
+        self.assertFalse(should_use_fast_fallback_before_ollama(event))
+        prompt = build_character_reply_prompt(event)
+        self.assertIn("Resolved GW1 context: The Scourge Beneath", prompt)
+        self.assertIn("fresh in-character reply", prompt)
 
     def test_gw1_resolver_maps_tunnel_run_to_scourge_beneath(self) -> None:
         event = event_from_game_log(
@@ -838,7 +841,7 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(context.canonical_topic, "Vanguard Rescue: Save the Ascalonian Noble")
         self.assertGreaterEqual(context.confidence, 0.9)
 
-    def test_duke_gaban_search_uses_quest_specific_fast_reply(self) -> None:
+    def test_duke_gaban_search_fallback_stays_quest_specific(self) -> None:
         world_state.recent_chat_history.append("[Player]: where is Duke Gaban?")
         event = event_from_game_log(
             {
@@ -856,7 +859,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         reply = fallback_rule_decision(event)
 
-        self.assertTrue(should_use_fast_fallback_before_ollama(event))
+        self.assertFalse(should_use_fast_fallback_before_ollama(event))
         self.assertRegex(reply.response.lower(), r"gaban|side|chamber|alcove|dead-end|catacombs|escort|search")
         self.assertNotRegex(reply.response.lower(), r"first pull|tunnels it is|wrap around|keep it tight")
 
@@ -883,7 +886,7 @@ class HermesDaemonTests(unittest.TestCase):
                 )
                 self.assertEqual(context.canonical_topic, topic)
 
-    def test_purp_hammer_fast_path_reacts_to_named_loot(self) -> None:
+    def test_purp_hammer_fallback_reacts_to_named_loot(self) -> None:
         event = event_from_game_log(
             {
                 "sender": "Player",
@@ -900,7 +903,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         reply = fallback_rule_decision(event)
 
-        self.assertTrue(should_use_fast_fallback_before_ollama(event))
+        self.assertFalse(should_use_fast_fallback_before_ollama(event))
         self.assertRegex(reply.response.lower(), r"purple|hammer|pre|northlands")
         self.assertNotRegex(reply.response.lower(), r"what'?s up|one more detail|maybe|keep going")
 
@@ -1440,11 +1443,10 @@ class HermesDaemonTests(unittest.TestCase):
         finally:
             hermes_daemon.ollama_generate_visible = original_generate
 
-        self.assertEqual(
-            [reply.message for reply in replies],
-            ["Yes. Charr threaten Ascalon. We prepare, then go past the Wall."],
-        )
-        self.assertEqual(len(prompts), 0)
+        self.assertEqual(len(replies), 1)
+        self.assertRegex(replies[0].message, r"Ascalon")
+        self.assertRegex(replies[0].message.lower(), r"threaten|prepare|hit|charr")
+        self.assertEqual(len(prompts), 1)
 
     def test_azele_charr_leveling_plan_understands_player_intent(self) -> None:
         decision = fallback_rule_decision(
@@ -1700,11 +1702,10 @@ class HermesDaemonTests(unittest.TestCase):
         finally:
             hermes_daemon.ollama_generate_visible = original_generate
 
-        self.assertEqual(
-            [reply.message for reply in replies],
-            ["We wouldn’t. Not while they’re threatening Ascalon. You had me worried for a second."],
-        )
-        self.assertEqual(len(prompts), 0)
+        self.assertEqual(len(replies), 1)
+        self.assertRegex(replies[0].message, r"Ascalon")
+        self.assertRegex(replies[0].message.lower(), r"would not|wouldn.t|not while|threatening")
+        self.assertEqual(len(prompts), 1)
 
     def test_azele_fallback_handles_inventory_continuation_before_ready_keyword(self) -> None:
         decision = fallback_rule_decision(
@@ -2261,20 +2262,28 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex(replies[0].message.lower(), r"ale|fifteen|15|warm|city|stairs")
         self.assertGreater(world_state.last_player_chat_at, 0)
 
-    def test_lightweight_party_chat_skips_slow_ollama_path(self) -> None:
+    def test_lightweight_party_chat_uses_ollama_before_fallback(self) -> None:
         original = hermes_daemon.decide_with_ollama
+        seen_messages: list[str] = []
 
-        def fail_if_called(event: hermes_daemon.TelemetryEvent, **_: object) -> hermes_daemon.HermesDecision:
-            raise AssertionError("Lightweight party chat should not wait on Ollama")
+        def fake_decide(event: hermes_daemon.TelemetryEvent, **_: object) -> hermes_daemon.HermesDecision:
+            seen_messages.append(event.message)
+            generated = {
+                "hi azele!": "Hey. I am here. What are we doing?",
+                "gl": "Good luck to us, then. Stay close.",
+                "gz": "Thank you. I am trying not to look too pleased.",
+                "ty all": "Anytime. I can be useful when I want to be.",
+            }[event.message]
+            return hermes_daemon.HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="NORMAL",
+                response=generated,
+            )
 
-        hermes_daemon.decide_with_ollama = fail_if_called
+        hermes_daemon.decide_with_ollama = fake_decide
         try:
-            for message, expected in [
-                ("hi azele!", r"hey|hi|there|with you|hear"),
-                ("gl", r"luck|sharp|stubborn|close|count"),
-                ("gz", r"thanks|thank you|stronger|pleased"),
-                ("ty all", r"welcome|useful|anytime|habit"),
-            ]:
+            for message in ["hi azele!", "gl", "gz", "ty all"]:
                 with self.subTest(message=message):
                     replies = process_event(
                         event_from_game_log(
@@ -2295,9 +2304,10 @@ class HermesDaemonTests(unittest.TestCase):
                         use_ollama=True,
                     )
                     self.assertEqual(len(replies), 1)
-                    self.assertRegex(replies[0].message.lower(), expected)
+                    self.assertNotIn("Generated reply", replies[0].message)
         finally:
             hermes_daemon.decide_with_ollama = original
+        self.assertEqual(seen_messages, ["hi azele!", "gl", "gz", "ty all"])
 
     def test_player_chat_ollama_uses_short_latency_budget(self) -> None:
         original_settings = hermes_daemon.settings
@@ -3423,8 +3433,8 @@ class HermesDaemonTests(unittest.TestCase):
             }
         )
 
-        self.assertTrue(should_use_fast_fallback_before_ollama(event))
-        replies = process_event(event, record_id=1742, use_ollama=True)
+        self.assertFalse(should_use_fast_fallback_before_ollama(event))
+        replies = process_event(event, record_id=1742, use_ollama=False)
 
         self.assertEqual(len(replies), 1)
         self.assertIn("too close", replies[0].message.lower())
@@ -3463,8 +3473,8 @@ class HermesDaemonTests(unittest.TestCase):
             }
         )
 
-        self.assertTrue(should_use_fast_fallback_before_ollama(event))
-        replies = process_event(event, record_id=1743, use_ollama=True)
+        self.assertFalse(should_use_fast_fallback_before_ollama(event))
+        replies = process_event(event, record_id=1743, use_ollama=False)
 
         self.assertEqual(len(replies), 1)
         self.assertIn("Charr", replies[0].message)

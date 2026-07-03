@@ -1162,7 +1162,8 @@ def gw1_context_hint(event: TelemetryEvent) -> str:
     return (
         f"Resolved GW1 context: {context.canonical_topic} "
         f"(intent={context.intent}, era={context.era_scope}, confidence={context.confidence:.2f}). "
-        f"Use these anchors if relevant: {anchors}."
+        f"Use these anchors if relevant: {anchors}. "
+        "Treat this as grounding for a fresh in-character reply, not a script to copy."
     )
 
 
@@ -1565,6 +1566,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Rules:\n"
         f"- One short party-chat reply. Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
         "- Directly answer the player's intent: plan, question, correction, discovery, upgrade, joke, flirt, or clarification.\n"
+        "- Even when a known slang/lore/context pattern is detected, generate a fresh reply first; deterministic lines are only emergency fallback.\n"
         "- If replying to Azele's recent line, continue that exchange; if the player asks 'what?', explain her previous line plainly.\n"
         "- Make dialogue feel ongoing with a small conversational handoff when it fits.\n"
         "- Do not end every reply with a question; mix questions with softer hooks like 'I can work with that', 'tell me the angle', or 'I am with you'.\n"
@@ -1855,29 +1857,10 @@ def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
 
 
 def should_use_fast_fallback_before_ollama(event: TelemetryEvent) -> bool:
-    if event.event_type != "player_chat" or event.channel != "party" or event.persona.strip().lower() != "azele":
-        return False
-    if is_lightweight_party_chat_context(event.message):
-        return True
-    if is_alcohol_consumable_context(event.message):
-        return True
-    if is_recent_combat_reflection_context(event.message):
-        return True
-    recent_context = recent_conversation_context(limit=6)
-    if is_duke_gaban_search_context(event.message, event, recent_context):
-        return True
-    context = resolve_gw1_context(event, recent_context)
-    return context.matched and context.confidence >= 0.88 and context.entry_id in {
-        "quest.scourge_beneath",
-        "title.ldoa",
-        "enemy.charr",
-        "loot.black_dye",
-        "loot.purple",
-        "item.red_iris",
-        "gear.krytan_leggings",
-        "npc.devona_pet",
-        "quest.vanguard_rescue_gaban",
-    }
+    # Direct player chat should feel generated. Resolver hits and conversational
+    # heuristics enrich/validate the model prompt; deterministic Azele branches
+    # are reserved for fallback after Ollama failure.
+    return False
 
 
 def should_consider_speaking_for_event(event: TelemetryEvent) -> bool:
