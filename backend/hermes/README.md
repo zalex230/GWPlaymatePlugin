@@ -35,7 +35,7 @@ Useful environment variables live in `backend/.env`:
 - `SUPABASE_SERVICE_KEY`
 - `HERMES_USE_OLLAMA`
 - `OLLAMA_HOST`
-- `OLLAMA_MODEL`
+- `OLLAMA_MODEL` (default: `hermes-qwen35-4b:latest`; keep Hermes on the fast quantized Qwen model)
 - `OLLAMA_NUM_CTX`
 - `OLLAMA_NUM_PREDICT`
 - `HERMES_TTS_PROVIDER`

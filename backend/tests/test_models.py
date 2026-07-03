@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import unittest
+import os
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
+from backend.shared.config import BackendSettings
 from backend.shared.models import CompanionReplyRow, HermesDecision, TelemetryEvent
 
 
 class ModelTests(unittest.TestCase):
+    def test_default_ollama_model_stays_on_fast_qwen(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(BackendSettings().ollama_model, "hermes-qwen35-4b:latest")
+
     def test_telemetry_normalizes_channel_and_event_type(self) -> None:
         event = TelemetryEvent(
             persona="A Test",
