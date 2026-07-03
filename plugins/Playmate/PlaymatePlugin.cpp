@@ -1587,7 +1587,7 @@ void PlaymatePlugin::QueueCompanionTts(QueuedTtsRequest request)
     }
     {
         std::lock_guard lock(queue_mutex_);
-        if (tts_requests_.size() >= 4) {
+        if (tts_requests_.size() >= 12) {
             tts_requests_.pop_front();
         }
         tts_requests_.push_back(std::move(request));

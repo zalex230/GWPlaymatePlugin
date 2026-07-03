@@ -37,6 +37,7 @@ from backend.hermes_daemon.daemon import (
     memory_event_from,
     memory_buffers,
     memory_last_write_at,
+    misses_clear_player_intent,
     model_reply_has_bad_shape,
     persona_living_notes,
     prompt_relevant_memories,
@@ -215,14 +216,14 @@ class HermesDaemonTests(unittest.TestCase):
             hermes_daemon.settings = original_settings
 
     def test_tts_payload_uses_pronunciation_text_only_for_audio(self) -> None:
-        text = "Azele says Ascalon City is home, not Old Ascalon."
+        text = "Hmph, Azele says Ascalon City is home, not Old Ascalon."
 
         kokoro = hermes_daemon._kokoro_tts_payload(text)
         chatterbox = hermes_daemon._chatterbox_tts_payload(text, expression="happy")
 
-        self.assertEqual(kokoro["input"], "Azelle says Ask-alon City is home, not Old Ask-alon.")
-        self.assertEqual(chatterbox["input"], "Azelle says Ask-alon City is home, not Old Ask-alon.")
-        self.assertEqual(text, "Azele says Ascalon City is home, not Old Ascalon.")
+        self.assertEqual(kokoro["input"], "Humph, Azelle says Ask-alon City is home, not Old Ask-alon.")
+        self.assertEqual(chatterbox["input"], "Humph, Azelle says Ask-alon City is home, not Old Ask-alon.")
+        self.assertEqual(text, "Hmph, Azele says Ascalon City is home, not Old Ascalon.")
 
     def test_chatterbox_tts_payload_uses_distinct_mood_profiles(self) -> None:
         angry = hermes_daemon._chatterbox_tts_payload("Charr at the gate.", expression="angry")
@@ -2124,6 +2125,7 @@ class HermesDaemonTests(unittest.TestCase):
     def test_model_reply_shape_rejects_runons_and_dangling_splits(self) -> None:
         self.assertTrue(model_reply_has_bad_shape("I"))
         self.assertTrue(model_reply_has_bad_shape("Yeah"))
+        self.assertTrue(model_reply_has_bad_shape("I can handle whatever comes up from them later on if needed too since they're not worth"))
         self.assertTrue(
             model_reply_has_bad_shape(
                 "I know you do like that outfit though it does fit well on me today isn't it nice hearing from someone who knows exactly why they look good here"
@@ -2179,6 +2181,45 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertFalse(model_reply_has_bad_shape(reply))
         self.assertGreater(len(hermes_daemon.split_gw_chat_lines(reply)), 5)
         self.assertLessEqual(len(hermes_daemon.split_gw_chat_lines(reply)), hermes_daemon.MAX_GW_REPLY_LINES)
+
+    def test_voice_preference_context_stays_on_voice(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hey. i just gave you a new voice. instead of Bella, it's now Heart. you like the new voice?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        self.assertFalse(
+            misses_clear_player_intent("Heart suits me better than Bella. Softer, but still mine.", event)
+        )
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("Charr are still out there, so we should hunt them after this.", event)
+
+        decision = fallback_rule_decision(event)
+        self.assertRegex(decision.response.lower(), r"heart|bella|voice|sound")
+        self.assertNotRegex(decision.response.lower(), r"charr|hunt|combat")
+
+    def test_voice_preference_rejects_overlong_tangent(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "do you like the Heart voice better than Bella?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+        reply = (
+            "Heart is warmer than Bella. I like it. "
+            "Just do not expect me to be soft now. "
+            "Charr are still out there. "
+            "Maybe we should hunt them after this."
+        )
+
+        with self.assertRaisesRegex(ValueError, "misdirected voice reply"):
+            validate_model_reply(reply, event)
 
     def test_model_reply_repairs_minor_checkin_grammar_before_validation(self) -> None:
         event = event_from_game_log(

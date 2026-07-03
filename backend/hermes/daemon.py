@@ -51,7 +51,7 @@ ambient_quip_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
 MAX_GW_REPLY_LINES = 8
 MULTI_MESSAGE_MIN_REPLY_DELAY_MS = 3200
-MULTI_MESSAGE_MAX_REPLY_DELAY_MS = 9000
+MULTI_MESSAGE_MAX_REPLY_DELAY_MS = 14000
 VISIBLE_ENEMY_RANGE = 900.0
 AMBIENT_QUIP_MIN_SECONDS = 55.0
 AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 55.0
@@ -171,7 +171,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
 )
 FILLER_ONLY_REPLY_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]*(?:yeah|okay|cute)?[.!?]?\s*$", re.IGNORECASE)
 DANGLING_REPLY_ENDING_PATTERN = re.compile(
-    r"(?:\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\b(?:so|because|then|and|but)\s+(?:we|i|you|they|he|she|it))$",
+    r"(?:\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\b(?:not\s+worth|so|because|then|and|but)\s*(?:we|i|you|they|he|she|it)?)$",
     re.IGNORECASE,
 )
 DANGLING_SPLIT_ENDING_PATTERN = re.compile(
@@ -1614,6 +1614,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Use pre-Searing lived knowledge only. Do not mention the Searing, future ruins, Kryta travel, refugees, or hindsight.\n"
         "- Charr are real enemies threatening Ascalon; hunting or fighting them means defending Ascalon and home. Never imply Charr need saving; head toward the Wall/Northlands if needed.\n"
         "- Level-up praise means thank the player and feel stronger, not red irises, bag slots, or pack upgrades.\n"
+        "- If the player talks about Azele's voice, TTS, Kokoro, Bella, Heart, sound, or pronunciation, answer that directly. Do not pivot to Charr, combat, quests, or old context.\n"
         "- Dwarven Ale or alcohol consumables happen to Azele; react directly to how it feels.\n"
         "- Inventory, Small Equipment Pack, and red iris flowers are storage; Krytan leggings/miniskirt/boots/armor are Azele's visible outfit/style change; answer longer skirt or her current mini skirt directly and assume it is Azele's gear/body/clothes.\n"
         "- GW slang: purple means purple-rarity loot; green means unique loot; tunnel run means The Scourge Beneath.\n"
@@ -1803,7 +1804,7 @@ def estimate_reply_delay_ms(text: str) -> int:
         return MULTI_MESSAGE_MIN_REPLY_DELAY_MS
     visible_chars = len(re.sub(r"\s+", "", cleaned))
     word_count = max(1, len(cleaned.split()))
-    estimated = max(visible_chars * 55, word_count * 310) + 900
+    estimated = max(visible_chars * 75, word_count * 430) + 1400
     return int(max(MULTI_MESSAGE_MIN_REPLY_DELAY_MS, min(MULTI_MESSAGE_MAX_REPLY_DELAY_MS, estimated)))
 
 
@@ -2532,6 +2533,22 @@ def is_item_space_context(text: str) -> bool:
     )
 
 
+def is_voice_preference_context(text: str) -> bool:
+    return bool(
+        re.search(r"\b(?:voice|tts|kokoro|bella|heart|sound(?:s|ed|ing)?|pronounce|pronunciation)\b", text or "", re.IGNORECASE)
+        and re.search(r"\b(?:you|your|new|like|better|suit|fits?|gave|changed|instead|bella|heart)\b", text or "", re.IGNORECASE)
+    )
+
+
+def azele_voice_preference_reply(message: str) -> str:
+    lowered = readable_game_text(message).lower()
+    if "heart" in lowered and "bella" in lowered:
+        return "Heart suits me better than Bella, I think. Softer, but still mine."
+    if "heart" in lowered:
+        return "I like Heart. It feels warmer on me. Keep this one for a bit?"
+    return "I like this voice better. It sounds more like me when I am not trying too hard."
+
+
 def is_red_iris_bag_context(text: str) -> bool:
     return bool(re.search(r"\b(?:red\s+)?irises?|flowers?\b", text or "", re.IGNORECASE) and is_item_space_context(text))
 
@@ -2638,6 +2655,8 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return False
     message = readable_game_text(event.message)
     recent_context = recent_conversation_context(limit=6)
+    if is_voice_preference_context(message):
+        return not re.search(r"\b(?:voice|heart|bella|sound|sounds|suit|fits?|like|warmer|softer|better|me)\b", reply, re.IGNORECASE)
     if is_duke_gaban_search_context(message, event, recent_context):
         return not re.search(r"\b(?:gaban|duke|noble|catacombs?|search|look|check|escort|alcove|side|chamber|path|corner)\b", reply, re.IGNORECASE)
     if is_alcohol_consumable_context(message):
@@ -2669,6 +2688,28 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
     if is_item_space_context(message):
         return not re.search(r"\b(?:bag|slot|space|inventory|pack|carry|storage|items?|gear|weapons?|armor|armou?r)\b", reply, re.IGNORECASE)
     return False
+
+
+def misdirects_voice_preference(reply: str, event: TelemetryEvent) -> bool:
+    if event.event_type != "player_chat" or event.channel != "party":
+        return False
+    if not is_voice_preference_context(event.message):
+        return False
+    return bool(re.search(r"\b(?:charr|hunt|combat|fight|quest|patrol|northlands|wall|gate)\b", reply, re.IGNORECASE))
+
+
+def reply_too_long_for_context(reply: str, event: TelemetryEvent) -> bool:
+    if event.event_type != "player_chat" or event.channel != "party":
+        return False
+    line_count = len(split_gw_chat_lines(reply))
+    if line_count <= 1:
+        return False
+    message = readable_game_text(event.message)
+    if is_voice_preference_context(message):
+        return line_count > 2
+    if re.search(r"\b(?:tell me more|explain|elaborate|story|backstory|past|why|what happened|how did)\b", message, re.IGNORECASE):
+        return False
+    return line_count > 4
 
 
 CHARR_MENTION_PATTERN = re.compile(r"\bcha?rr?\b", re.IGNORECASE)
@@ -3405,6 +3446,10 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("unsupported level-up pack causality")
     if misses_clear_player_intent(reply, event):
         raise ValueError("missed clear player intent")
+    if misdirects_voice_preference(reply, event):
+        raise ValueError("misdirected voice reply")
+    if reply_too_long_for_context(reply, event):
+        raise ValueError("overlong model reply")
     if invents_self_duplicate(reply):
         raise ValueError("unsupported self duplicate reference")
     if model_reply_has_bad_shape(reply):
@@ -3474,7 +3519,13 @@ def character_reply_with_ollama(
             f"({type(exc).__name__}: {exc}): {preview!r}",
             flush=True,
         )
-        if str(exc) in {"missed clear player intent", "bad shape model reply", "repeated recent reply"}:
+        if str(exc) in {
+            "missed clear player intent",
+            "bad shape model reply",
+            "repeated recent reply",
+            "overlong model reply",
+            "misdirected voice reply",
+        }:
             retry_exc: Exception | None = None
             retry_started_at = time.perf_counter()
             retry_prompt = build_player_intent_retry_prompt(event, cleaned, str(exc))
@@ -3685,6 +3736,8 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
 
 def azele_fast_reply(event: TelemetryEvent) -> str:
     message = (event.message or "").lower()
+    if is_voice_preference_context(message):
+        return azele_voice_preference_reply(message)
     if combat_reply := azele_recent_combat_reply(event):
         return combat_reply
     if social_reply := (azele_social_banter_reply(message) if is_social_banter_context(message) else None):
@@ -4088,6 +4141,7 @@ def reply_expression(text: str, urgency: str = "NORMAL") -> str:
 
 
 TTS_PRONUNCIATION_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bHmph\b", re.IGNORECASE), "Humph"),
     (re.compile(r"\bAzele\b", re.IGNORECASE), "Azelle"),
     (re.compile(r"\bAscalon\b", re.IGNORECASE), "Ask-alon"),
 )
