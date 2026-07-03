@@ -15,7 +15,7 @@ os.environ["GWPLAYMATE_DISABLE_MEMORY_WRITES"] = "1"
 import backend.hermes.daemon as hermes_daemon
 from backend.shared.models import CompanionReplyInsert
 from backend.hermes_daemon.daemon import (
-    FILLER_OPENER_PATTERN,
+    FILLER_ONLY_REPLY_PATTERN,
     LOW_QUALITY_REPLY_PATTERNS,
     AMBIENT_HEARTBEAT_ACTIVITY_SECONDS,
     AMBIENT_QUIP_MIN_SECONDS,
@@ -558,9 +558,9 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("Do not overplay 'princess', 'brat', 'cute girl', or 'snarky companion'", prompt)
         self.assertIn("'ugh'", prompt)
         self.assertIn("'shut up'", prompt)
-        self.assertIn("Do not start replies with filler noises", prompt)
+        self.assertIn("Do not rely on filler noises as the whole reply", prompt)
         self.assertIn("socially quick 22-year-old", prompt)
-        self.assertIn("peace-talkers", prompt)
+        self.assertRegex("The Northlands is no place for peace-talkers.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertIn("The player is not Azele", prompt)
         self.assertIn("Address the player as 'you'", prompt)
         self.assertIn("Dwarven Ale or alcohol consumables happen to Azele", prompt)
@@ -2104,10 +2104,22 @@ class HermesDaemonTests(unittest.TestCase):
             LOW_QUALITY_REPLY_PATTERNS,
         )
 
-    def test_azele_rejects_repeated_filler_openers(self) -> None:
-        self.assertRegex("Mhmm, I am listening.", FILLER_OPENER_PATTERN)
-        self.assertRegex("mm, cute.", FILLER_OPENER_PATTERN)
-        self.assertNotRegex("I know. You can say it again though.", FILLER_OPENER_PATTERN)
+    def test_azele_allows_natural_filler_openers_with_substance(self) -> None:
+        self.assertRegex("Mm.", FILLER_ONLY_REPLY_PATTERN)
+        self.assertRegex("hm, okay.", FILLER_ONLY_REPLY_PATTERN)
+        self.assertNotRegex("Mm, cute. You say that like you want me to take the lead.", FILLER_ONLY_REPLY_PATTERN)
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "more like, we'll be doing the hunting, thank you very much",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+        self.assertEqual(
+            validate_model_reply("Mm, cute. You say that like you want me to take the lead.", event),
+            "Mm, cute. You say that like you want me to take the lead.",
+        )
 
     def test_model_reply_shape_rejects_runons_and_dangling_splits(self) -> None:
         self.assertTrue(model_reply_has_bad_shape("I"))
@@ -2120,7 +2132,7 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(model_reply_has_bad_shape("Feels good being home after all that travel though it looks different but"))
         self.assertTrue(
             model_reply_has_bad_shape(
-                "A melandru stalker sounds better for her though, maybe she'll actually use that instead of just hoarding them like Devona does with everything else anyway."
+                "A melandru stalker sounds better for her though, maybe she'll actually use that instead of just hoarding them in the pack while we circle every single path twice and pretend that is a real plan anyway."
             )
         )
         self.assertTrue(
@@ -2134,6 +2146,39 @@ class HermesDaemonTests(unittest.TestCase):
             )
         )
         self.assertFalse(model_reply_has_bad_shape("I know. Still nice to hear."))
+        self.assertFalse(
+            model_reply_has_bad_shape(
+                "A melandru stalker sounds better for her though. Maybe she'll actually use that instead of just hoarding it."
+            )
+        )
+
+    def test_model_reply_allows_more_fluid_banter_and_punctuation(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "that was actually kind of fun",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = "It was! Annoying, loud, and a little stupid, but yes. I had fun with you."
+
+        self.assertEqual(validate_model_reply(reply, event), reply)
+
+    def test_model_reply_shape_allows_longer_complete_conversational_replies(self) -> None:
+        reply = (
+            "I can tell you more, yes. I was born close enough to Ascalon City that the walls felt normal to me. "
+            "My mother worried too much, my father pretended he did not, and I learned early that looking harmless "
+            "made people underestimate me. That helped more than it probably should have. If you want the prettier "
+            "version, I can give you that too, but the honest one is messier. I liked ribbons, sharp knives, and "
+            "pretending I was not scared when the older trainees talked too loudly. I still do that sometimes. "
+            "The pretending, I mean. Not the ribbons. Well, maybe the ribbons too."
+        )
+
+        self.assertFalse(model_reply_has_bad_shape(reply))
+        self.assertGreater(len(hermes_daemon.split_gw_chat_lines(reply)), 5)
+        self.assertLessEqual(len(hermes_daemon.split_gw_chat_lines(reply)), hermes_daemon.MAX_GW_REPLY_LINES)
 
     def test_model_reply_repairs_minor_checkin_grammar_before_validation(self) -> None:
         event = event_from_game_log(

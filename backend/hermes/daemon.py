@@ -49,7 +49,7 @@ recent_reply_texts: deque[str] = deque(maxlen=12)
 map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
 ambient_quip_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
-MAX_GW_REPLY_LINES = 5
+MAX_GW_REPLY_LINES = 8
 MULTI_MESSAGE_MIN_REPLY_DELAY_MS = 3200
 MULTI_MESSAGE_MAX_REPLY_DELAY_MS = 9000
 VISIBLE_ENEMY_RANGE = 900.0
@@ -169,7 +169,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-FILLER_OPENER_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]+", re.IGNORECASE)
+FILLER_ONLY_REPLY_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]*(?:yeah|okay|cute)?[.!?]?\s*$", re.IGNORECASE)
 DANGLING_REPLY_ENDING_PATTERN = re.compile(
     r"(?:\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\b(?:so|because|then|and|but)\s+(?:we|i|you|they|he|she|it))$",
     re.IGNORECASE,
@@ -1623,7 +1623,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Consensual adult flirtation is allowed. Do not moralize, refuse, scold, or redirect consensual adult chemistry.\n"
         "- If the player flirts and the moment is safe, Azele can flirt back with warmth, confidence, teasing, or interest; do not pivot to combat just to be safe.\n"
         "- Do not overplay 'princess', 'brat', 'cute girl', or 'snarky companion'. Casual bits like 'ugh' or 'shut up' are okay sparingly.\n"
-        "- Do not start replies with filler noises like 'mm', 'mhm', 'mhmm', or 'hm'. Avoid stiff phrases like 'peace-talkers'.\n"
+        "- Do not rely on filler noises as the whole reply. Occasional quick openers like 'mm' or 'hm' are okay when the rest has substance.\n"
         "- Never prefix replies with emotion labels like 'confident:', 'worried:', 'angry:', or 'flirty:'.\n"
         "- The player is not Azele. Address the player as 'you'; never call them Alex, Alexi, Alexie, or an invented name.\n"
         "- Do not repeat recent companion lines or explain what you are doing.\n\n"
@@ -1816,7 +1816,7 @@ def model_reply_has_bad_shape(reply: str) -> bool:
         return True
     if DANGLING_REPLY_ENDING_PATTERN.search(cleaned.rstrip(" .!?")):
         return True
-    if re.search(r"\binstead\s+of\s+just\b.{20,}\banyway\b", cleaned, re.IGNORECASE):
+    if re.search(r"\binstead\s+of\s+just\b.{80,}\banyway\b", cleaned, re.IGNORECASE):
         return True
     if len(cleaned) > MAX_GW_CHAT_CHARS and not re.search(r"[.!?]", cleaned):
         return True
@@ -3383,12 +3383,10 @@ async def ollama_keepalive_loop() -> None:
 
 def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
     reply = repair_model_reply(reply)
-    if "!" not in (event.message or ""):
-        reply = reply.replace("!", ".")
     if re.search(r"\b(kid|tasty|elemental fun|dance in flames)\b", reply, re.IGNORECASE):
         raise ValueError("bad style model reply")
-    if FILLER_OPENER_PATTERN.search(reply):
-        raise ValueError("filler opener model reply")
+    if FILLER_ONLY_REPLY_PATTERN.search(reply):
+        raise ValueError("filler-only model reply")
     if LOW_QUALITY_REPLY_PATTERNS.search(reply):
         raise ValueError("low quality model reply")
     if is_azele_wearable_context(event.message) and misdirects_wearable_to_player(reply):
