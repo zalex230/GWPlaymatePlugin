@@ -171,7 +171,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
 )
 FILLER_ONLY_REPLY_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]*(?:yeah|okay|cute)?[.!?]?\s*$", re.IGNORECASE)
 DANGLING_REPLY_ENDING_PATTERN = re.compile(
-    r"(?:\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\b(?:not\s+worth|so|because|then|and|but)\s*(?:we|i|you|they|he|she|it)?)$",
+    r"(?:\b(?:and|but|or|so|because|before|after|when|while|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\b(?:not\s+worth|so|because|then|and|but)\s*(?:we|i|you|they|he|she|it)?)$",
     re.IGNORECASE,
 )
 DANGLING_SPLIT_ENDING_PATTERN = re.compile(
@@ -1315,11 +1315,17 @@ AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
         "City air helps. What do you usually do first when you get back here?",
         "I keep recognizing faces here. Comforting, mostly. Do you ever get that?",
         "If we stay too long, I’m going to start fussing with my hair, and then you have to pretend not to notice.",
+        "The streets are loud today. Traders, guards, everyone acting like the city can hear them. Do you like it?",
+        "I like how busy Ascalon feels when we come back. Makes the road feel less lonely, doesn't it?",
+        "The city has that polished, watchful feeling again. Are we shopping, resting, or pretending we are disciplined?",
     ],
     "lakeside county": [
         "Lakeside is too pretty for how much trouble finds it. What are we looking for out here?",
         "I used to think these roads were huge. Funny what changes, isn't it?",
         "The water makes everything sound calmer than it is. Does it work on you?",
+        "The grass out here always catches the light nicely. Makes it harder to stay serious, doesn't it?",
+        "Lakeside has that green, ordinary sort of beauty. Dangerous little trick, making trouble look peaceful.",
+        "Between the water and the trees, I almost forget we are probably about to get interrupted. Almost.",
     ],
     "ashford abbey": [
         "Ashford always feels like someone is about to assign homework. Please tell me we are not doing homework.",
@@ -1891,6 +1897,7 @@ def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
     return (
         (event.event_type in {"player_chat", "chat_log"} and event.channel == "party")
         or is_npc_dialogue_event(event)
+        or is_ambient_snapshot_event(event)
         or event.event_type in MAP_COMMENT_EVENT_TYPES
         or event.event_type == "item_drop"
     )
@@ -2671,6 +2678,12 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return not re.search(r"\b(?:charr|ascalon|wall|northlands|level|fourteen|14|ready|with you)\b", reply, re.IGNORECASE)
     if is_scourge_lfg_context(message):
         return not re.search(r"\b(?:scourge|lfg|listing|description|repost|party)\b", reply, re.IGNORECASE)
+    if is_mixed_tunnel_or_town_plan_context(message):
+        return not re.search(
+            r"\b(?:shop|shops|shopping|vendor|merchant|city|town|tunnel|catacomb|scourge|run|plan|depends|either|choose|decide)\b",
+            reply,
+            re.IGNORECASE,
+        )
     if is_scourge_beneath_run_context(message, event):
         return not re.search(r"\b(?:scourge|beneath|below|maz|scourgeheart|forsaken|devona|elemental|ascalon)\b", reply, re.IGNORECASE)
     if is_tunnel_plan_context(message):
@@ -2929,8 +2942,28 @@ def azele_scourge_lfg_reply(message: str) -> str:
     )
 
 
+def is_mixed_tunnel_or_town_plan_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    has_tunnel_option = bool(re.search(r"\b(?:tun+e?ls?|catacombs?|scou?rge|beneath|below)\b", lowered))
+    has_town_option = bool(re.search(r"\b(?:shops?|shopping|vendors?|merchants?|city|town|checking\s+out)\b", lowered))
+    asks_choice = bool(re.search(r"\b(?:or|either|plan(?:ned)?|today|what|wanna|want|should|could)\b", lowered))
+    return has_tunnel_option and has_town_option and asks_choice
+
+
+def azele_mixed_tunnel_or_town_plan_reply(message: str) -> str:
+    return first_fresh_reply(
+        [
+            "Shops first, then Scourge Beneath if we still feel sharp. I like a plan that lets me look good before getting dusty.",
+            "We can check the shops, then decide if Maz Scourgeheart deserves another visit. That feels sensible.",
+            "City shops first sounds nice. After that, tunnels if you still want trouble.",
+        ]
+    )
+
+
 def is_scourge_beneath_run_context(message: str, event: TelemetryEvent | None = None) -> bool:
     lowered = readable_game_text(message).lower()
+    if is_mixed_tunnel_or_town_plan_context(lowered):
+        return False
     if re.search(r"\b(?:the\s+)?scou?rge\s+(?:beneath|below)\b|\bmaz\s+scourgeheart\b", lowered):
         return True
     if event is not None and re.search(r"\b(?:do|run|another|wanna|want|go|try|scou?rge)\b.*\bscou?rge\b|\bscou?rge\b.*\b(?:run|again|wanna|want|go|try)\b", lowered):
@@ -3748,6 +3781,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return clarification
     if is_scourge_lfg_context(message):
         return azele_scourge_lfg_reply(message)
+    if is_mixed_tunnel_or_town_plan_context(message):
+        return azele_mixed_tunnel_or_town_plan_reply(message)
     if is_scourge_beneath_run_context(message, event):
         return azele_scourge_beneath_reply(message)
     if contextual_followup := azele_contextual_followup_reply(message):

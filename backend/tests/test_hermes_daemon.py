@@ -1736,6 +1736,46 @@ class HermesDaemonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missed clear player intent"):
             validate_model_reply("Alright, tunnels then. Keep it tight and do not let them wrap around us.", event)
 
+    def test_model_reply_accepts_mixed_tunnel_or_shop_plan(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "anything planned for today? another tunnel run? or we're checking out shops",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 779,
+                    "map_name": "Piken Square",
+                    "active_quest_id": 1456,
+                },
+            }
+        )
+        reply = "Depends on what feels good right now. Tunnels are exhausting though; maybe just a quick shop run before heading home."
+
+        self.assertEqual(validate_model_reply(reply, event), reply)
+
+    def test_azele_fallback_handles_mixed_tunnel_or_shop_plan(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "anything planned for today? another tunnel run? or we're checking out shops",
+                    "metadata": {
+                        "event_type": "player_chat",
+                        "persona": "Azele",
+                        "map_id": 779,
+                        "map_name": "Piken Square",
+                        "active_quest_id": 1456,
+                    },
+                }
+            )
+        )
+
+        self.assertRegex(decision.response.lower(), r"shop|city|vendor|merchant")
+        self.assertRegex(decision.response.lower(), r"tunnel|scourge|maz")
+
     def test_azele_fallback_handles_level_up_congratulations(self) -> None:
         decision = fallback_rule_decision(
             event_from_game_log(
@@ -2153,6 +2193,11 @@ class HermesDaemonTests(unittest.TestCase):
                 "A melandru stalker sounds better for her though. Maybe she'll actually use that instead of just hoarding it."
             )
         )
+        self.assertFalse(
+            model_reply_has_bad_shape(
+                "Morning! Just needed some fresh air after all those tunnels earlier anyway... ready for whatever comes next though."
+            )
+        )
 
     def test_model_reply_allows_more_fluid_banter_and_punctuation(self) -> None:
         event = event_from_game_log(
@@ -2333,7 +2378,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertTrue(should_use_ollama_for_event(chat_event))
         self.assertTrue(should_use_ollama_for_event(map_event))
-        self.assertFalse(should_use_ollama_for_event(snapshot_event))
+        self.assertTrue(should_use_ollama_for_event(snapshot_event))
 
     def test_ollama_generation_includes_item_drop_events(self) -> None:
         event = event_from_game_log(
@@ -2887,11 +2932,7 @@ class HermesDaemonTests(unittest.TestCase):
         )
 
         self.assertEqual(len(replies), 1)
-        self.assertIn(replies[0].message, {
-            "City air helps. What do you usually do first when you get back here?",
-            "I keep recognizing faces here. Comforting, mostly. Do you ever get that?",
-            "If we stay too long, I’m going to start fussing with my hair, and then you have to pretend not to notice.",
-        })
+        self.assertRegex(replies[0].message.lower(), r"city|ascalon|streets|traders|guards|hair")
 
     def test_map_entry_uses_ollama_generation_when_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
@@ -2960,7 +3001,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(replies, [])
 
-    def test_ambient_snapshot_uses_fallback_generation_when_ollama_enabled(self) -> None:
+    def test_ambient_snapshot_uses_ollama_generation_when_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
         hermes_daemon.character_reply_with_ollama = lambda event, **_: hermes_daemon.HermesDecision(
             should_speak=True,
@@ -2991,7 +3032,7 @@ class HermesDaemonTests(unittest.TestCase):
             hermes_daemon.character_reply_with_ollama = original
 
         self.assertEqual(len(replies), 1)
-        self.assertNotEqual(replies[0].message, "Generated quiet moment. What are you watching?")
+        self.assertEqual(replies[0].message, "Generated quiet moment. What are you watching?")
 
     def test_ambient_snapshot_rejects_invented_purple_loot_hook(self) -> None:
         event = event_from_game_log(
@@ -3258,7 +3299,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(replies, [])
 
-    def test_ambient_heartbeat_uses_local_quip_even_when_ollama_enabled(self) -> None:
+    def test_ambient_heartbeat_uses_ollama_when_enabled(self) -> None:
         now = time.time()
         world_state.persona = "Azele"
         world_state.session_id = "ambient-heartbeat-llm"
@@ -3281,8 +3322,34 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertIsNotNone(reply)
         assert reply is not None
+        self.assertEqual(reply.message, "Generated heartbeat line. Still with me?")
+        self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
+
+    def test_ambient_heartbeat_falls_back_to_local_quip_when_ollama_fails(self) -> None:
+        now = time.time()
+        world_state.persona = "Azele"
+        world_state.session_id = "ambient-heartbeat-llm-fallback"
+        world_state.map_id = 148
+        world_state.map_name = "Ascalon City"
+        world_state.last_interaction_timestamp = now - (AMBIENT_HEARTBEAT_ACTIVITY_SECONDS / 2)
+        world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
+
+        original = hermes_daemon.character_reply_with_ollama
+
+        def fail_ollama(event: object) -> hermes_daemon.HermesDecision:
+            raise RuntimeError("offline")
+
+        hermes_daemon.character_reply_with_ollama = fail_ollama
+        try:
+            reply = ambient_heartbeat_reply(now=now, use_ollama=True)
+        finally:
+            hermes_daemon.character_reply_with_ollama = original
+
+        self.assertIsNotNone(reply)
+        assert reply is not None
         self.assertNotEqual(reply.message, "Generated heartbeat line. Still with me?")
         self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
+        self.assertRegex(reply.message.lower(), r"city|ascalon|streets|traders|guards|hair")
 
     def test_ambient_heartbeat_ignores_unknown_persona(self) -> None:
         now = time.time()
