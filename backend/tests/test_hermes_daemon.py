@@ -908,6 +908,23 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex(reply.response.lower(), r"going|alright|good|restless|watching|with you")
         self.assertNotIn("what are we doing", reply.response.lower())
 
+    def test_azele_handoffs_do_not_overuse_your_call(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "ok",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+        prompt = build_character_reply_prompt(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertNotIn("your call", reply.response.lower())
+        self.assertNotIn("your call", prompt.lower())
+
     def test_fallback_comments_on_social_party_banter(self) -> None:
         event = event_from_game_log(
             {

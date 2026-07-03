@@ -744,8 +744,14 @@ def sanitize_memory_for_prompt(text: str) -> str:
     return cleaned
 
 
+def sanitize_prompt_context(text: str) -> str:
+    cleaned = str(text or "")
+    cleaned = re.sub(r"\byour call\b", "we can choose", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
 def clamp_prompt_section(text: str, *, max_chars: int, from_end: bool = False) -> str:
-    cleaned = re.sub(r"[^\S\n]+", " ", str(text or ""))
+    cleaned = re.sub(r"[^\S\n]+", " ", sanitize_prompt_context(text))
     cleaned = "\n".join(line.strip() for line in cleaned.splitlines() if line.strip()).strip()
     if len(cleaned) <= max_chars:
         return cleaned or "None"
@@ -1561,7 +1567,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Directly answer the player's intent: plan, question, correction, discovery, upgrade, joke, flirt, or clarification.\n"
         "- If replying to Azele's recent line, continue that exchange; if the player asks 'what?', explain her previous line plainly.\n"
         "- Make dialogue feel ongoing with a small conversational handoff when it fits.\n"
-        "- Do not end every reply with a question; mix questions with hooks like 'your call' or 'I can work with that'.\n"
+        "- Do not end every reply with a question; mix questions with softer hooks like 'I can work with that', 'tell me the angle', or 'I am with you'.\n"
+        "- Avoid leaning on stock handoff phrases; vary the wording so Azele does not sound canned.\n"
         "- Use live map, quest, combat, loot, HP, NPC, and party facts before generic banter.\n"
         "- Do not invent rumors, enemies, locations, loot, threats, or Charr unless context mentions them.\n"
         "- If GW Wiki background is provided, answer in Azele's voice. Never say you looked online or checked a wiki.\n"
@@ -1920,7 +1927,7 @@ def should_ignore_radar_alert(event: TelemetryEvent) -> bool:
 def recent_reply_lines(limit: int = 8) -> list[str]:
     local_lines = list(recent_reply_texts)[-limit:]
     if not _supabase_configured():
-        return local_lines
+        return [sanitize_prompt_context(line) for line in local_lines]
     lines: list[str] = []
     try:
         client = create_supabase_client(settings)
@@ -1933,7 +1940,7 @@ def recent_reply_lines(limit: int = 8) -> list[str]:
             .execute()
         )
     except Exception:
-        return local_lines
+        return [sanitize_prompt_context(line) for line in local_lines]
     for row in reversed(response.data or []):
         message = readable_game_text(row.get("message"))
         if message and message not in lines:
@@ -1941,7 +1948,7 @@ def recent_reply_lines(limit: int = 8) -> list[str]:
     for message in local_lines:
         if message and message not in lines:
             lines.append(message)
-    return lines[-limit:]
+    return [sanitize_prompt_context(line) for line in lines[-limit:]]
 
 
 def recent_reply_context() -> str:
@@ -2707,7 +2714,7 @@ def azele_simple_ack_reply(message: str) -> str | None:
             [
                 "Good. Then we keep it careful.",
                 "Yeah. Same page, then.",
-                "Alright. Your call on the next move.",
+                "Alright. Point me where you want pressure.",
                 "Fair. I’m with you.",
             ]
         )
@@ -2953,7 +2960,7 @@ def azele_npc_dialogue_reply(event: TelemetryEvent) -> str:
     if any(word in message for word in ("help", "please", "trouble", "danger")):
         return first_fresh_reply(
             [
-                "That sounds like someone needs something. Your call.",
+                "That sounds like someone needs something. I can work with that.",
                 "I heard that too. We should at least look.",
                 "Trouble, then. Because of course.",
             ]
