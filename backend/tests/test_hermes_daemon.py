@@ -3407,7 +3407,7 @@ class HermesDaemonTests(unittest.TestCase):
             should_speak=True,
             channel_override="CHANNEL_PARTY",
             urgency="LOW",
-            response="Generated heartbeat line. Still with me?",
+            response="City is calm for once. Want to use the quiet or move?",
         )
         try:
             reply = ambient_heartbeat_reply(now=now, use_ollama=True)
@@ -3416,8 +3416,59 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertIsNotNone(reply)
         assert reply is not None
-        self.assertEqual(reply.message, "Generated heartbeat line. Still with me?")
+        self.assertEqual(reply.message, "City is calm for once. Want to use the quiet or move?")
         self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
+
+    def test_ambient_heartbeat_hides_internal_trigger_from_model_prompt(self) -> None:
+        now = time.time()
+        world_state.persona = "Azele"
+        world_state.session_id = "ambient-heartbeat-prompt"
+        world_state.map_id = 148
+        world_state.map_name = "Ascalon City"
+        world_state.last_interaction_timestamp = now - (AMBIENT_HEARTBEAT_ACTIVITY_SECONDS / 2)
+        world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
+
+        captured: dict[str, object] = {}
+        original = hermes_daemon.character_reply_with_ollama
+
+        def capture_event(event: object) -> hermes_daemon.HermesDecision:
+            captured["event"] = event
+            return hermes_daemon.HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="LOW",
+                response="Ascalon City is calm enough to breathe. What are you watching for?",
+            )
+
+        hermes_daemon.character_reply_with_ollama = capture_event
+        try:
+            reply = ambient_heartbeat_reply(now=now, use_ollama=True)
+        finally:
+            hermes_daemon.character_reply_with_ollama = original
+
+        self.assertIsNotNone(reply)
+        event = captured["event"]
+        prompt = build_character_reply_prompt(event)  # type: ignore[arg-type]
+        self.assertNotIn("ambient heartbeat", prompt.lower())
+        self.assertIn("quiet ambient moment", prompt.lower())
+
+    def test_ambient_model_reply_rejects_heartbeat_metaphor(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "System",
+                "channel": "system",
+                "message": "quiet ambient moment",
+                "metadata": {
+                    "event_type": "snapshot",
+                    "persona": "Azele",
+                    "map_id": 148,
+                    "map_name": "Ascalon City",
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "ambient scheduler"):
+            validate_model_reply("Yeah... that heartbeat feels closer now than last time.", event)
 
     def test_ambient_heartbeat_falls_back_to_local_quip_when_ollama_fails(self) -> None:
         now = time.time()

@@ -1416,6 +1416,12 @@ def is_ambient_snapshot_event(event: TelemetryEvent) -> bool:
     return True
 
 
+def model_visible_event_message(event: TelemetryEvent) -> str:
+    if is_ambient_snapshot_event(event):
+        return "quiet ambient moment"
+    return event.message
+
+
 def ambient_quip(event: TelemetryEvent) -> str:
     map_name = map_display_name(event).lower()
     for name, variants in AMBIENT_QUIP_VARIANTS.items():
@@ -1466,7 +1472,7 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
             event_type="snapshot",
             sender="System",
             channel="system",
-            message="ambient heartbeat",
+            message="quiet ambient moment",
             map_id=world_state.map_id,
             map_name=world_state.map_name,
             instance_type=world_state.instance_type,
@@ -1585,10 +1591,11 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         map_label = map_area_label(event)
         task = f"Make a rare, conversational ambient comment about being in {map_label}."
         context_block = (
-            f"Ambient moment: {event.message!r}\n"
+            f"Ambient moment: {model_visible_event_message(event)!r}\n"
             f"Lore-safe map context: {map_lore_hint(event) or 'No specific lore hint. Stay local and do not invent details.'}\n"
             "This is not urgent. Sound alive and present, but do not force a joke.\n"
             "Do not mention loot, drops, item colors/rarity, chests, stashes, or tell the player to check a thing unless the live event explicitly says one exists.\n"
+            "Do not use heartbeat, pulse, pulsing, or rhythm as a metaphor for the map or quiet moment.\n"
         )
     elif event.event_type == "item_drop":
         source_name = readable_game_text(getattr(event, "agent_name", ""))
@@ -1678,7 +1685,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Player: 'lets find more charr to kill' -> 'Yes. They threaten Ascalon. We prepare, then hit them.'\n"
         "Event: party_member_down -> 'Someone's down. Move, I can cover.'\n"
         "Player: 'more of what?' -> 'Fair. I made that sound mysterious by accident.'\n\n"
-        f"Event summary: type={event.event_type!r}, channel={event.channel!r}, sender={event.sender!r}, message={event.message!r}\n\n"
+        f"Event summary: type={event.event_type!r}, channel={event.channel!r}, sender={event.sender!r}, message={model_visible_event_message(event)!r}\n\n"
         f"Recent companion lines to avoid repeating:\n{chr(10).join(f'- {line}' for line in recent_reply_lines(limit=3, persona=event.persona)) or 'None'}\n\n"
         f"Return only {persona_name}'s reply to the latest player message/event."
     )
@@ -2319,12 +2326,12 @@ def azele_contextual_followup_reply(message: str) -> str | None:
             ]
         )
 
-    if "heartbeat" in previous_lower or "quiet" in previous_lower or "silence" in previous_lower or "noise" in previous_lower:
+    if "heartbeat" in previous_lower or "pulse" in previous_lower or "quiet" in previous_lower or "silence" in previous_lower or "noise" in previous_lower:
         if noish:
             return "Fair. Maybe the quiet is getting to me more than it is getting to you."
         return first_fresh_reply(
             [
-                "I meant the quiet here. It has this steady, watchful feeling to it.",
+                "I meant the quiet here. I made it sound stranger than I meant.",
                 "The silence, mostly. It feels too organized here, like someone is listening.",
                 "Just the way Ranik goes quiet. It makes me feel watched.",
             ]
@@ -3501,8 +3508,22 @@ async def ollama_keepalive_loop() -> None:
         await asyncio.sleep(20 * 60)
 
 
+AMBIENT_SCHEDULER_METAPHOR_PATTERN = re.compile(
+    r"\b(?:heart\s*beat|pulse|pulses|pulsing|rhythm|rhythms)\b",
+    re.IGNORECASE,
+)
+
+
+def leaks_ambient_scheduler_metaphor(reply: str, event: TelemetryEvent) -> bool:
+    if not is_ambient_snapshot_event(event):
+        return False
+    return bool(AMBIENT_SCHEDULER_METAPHOR_PATTERN.search(reply or ""))
+
+
 def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
     reply = repair_model_reply(reply)
+    if leaks_ambient_scheduler_metaphor(reply, event):
+        raise ValueError("leaked ambient scheduler metaphor")
     if re.search(r"\b(kid|tasty|elemental fun|dance in flames)\b", reply, re.IGNORECASE):
         raise ValueError("bad style model reply")
     if FILLER_ONLY_REPLY_PATTERN.search(reply):
@@ -3604,6 +3625,7 @@ def character_reply_with_ollama(
             "repeated recent reply",
             "overlong model reply",
             "misdirected voice reply",
+            "leaked ambient scheduler metaphor",
         }:
             retry_exc: Exception | None = None
             retry_started_at = time.perf_counter()
