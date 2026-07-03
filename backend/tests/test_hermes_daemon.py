@@ -2142,6 +2142,44 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex(replies[0].message.lower(), r"ale|fifteen|15|warm|city|stairs")
         self.assertGreater(world_state.last_player_chat_at, 0)
 
+    def test_lightweight_party_chat_skips_slow_ollama_path(self) -> None:
+        original = hermes_daemon.decide_with_ollama
+
+        def fail_if_called(event: hermes_daemon.TelemetryEvent, **_: object) -> hermes_daemon.HermesDecision:
+            raise AssertionError("Lightweight party chat should not wait on Ollama")
+
+        hermes_daemon.decide_with_ollama = fail_if_called
+        try:
+            for message, expected in [
+                ("hi azele!", r"hey|hi|there|with you|hear"),
+                ("gl", r"luck|sharp|stubborn|close|count"),
+                ("gz", r"thanks|thank you|stronger|pleased"),
+                ("ty all", r"welcome|useful|anytime|habit"),
+            ]:
+                with self.subTest(message=message):
+                    replies = process_event(
+                        event_from_game_log(
+                            {
+                                "sender": "Player",
+                                "channel": "party",
+                                "message": message,
+                                "metadata": {
+                                    "event_type": "player_chat",
+                                    "persona": "Azele",
+                                    "session_id": f"lightweight-{message}",
+                                    "map_id": 148,
+                                    "map_name": "Ascalon City",
+                                },
+                            }
+                        ),
+                        record_id=900,
+                        use_ollama=True,
+                    )
+                    self.assertEqual(len(replies), 1)
+                    self.assertRegex(replies[0].message.lower(), expected)
+        finally:
+            hermes_daemon.decide_with_ollama = original
+
     def test_player_chat_ollama_uses_short_latency_budget(self) -> None:
         original_settings = hermes_daemon.settings
         original_generate = hermes_daemon.ollama_generate_visible

@@ -1836,6 +1836,8 @@ def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
 def should_use_fast_fallback_before_ollama(event: TelemetryEvent) -> bool:
     if event.event_type != "player_chat" or event.channel != "party" or event.persona.strip().lower() != "azele":
         return False
+    if is_lightweight_party_chat_context(event.message):
+        return True
     if is_alcohol_consumable_context(event.message):
         return True
     if is_recent_combat_reflection_context(event.message):
@@ -2274,7 +2276,19 @@ def azele_contextual_followup_reply(message: str) -> str | None:
 
 
 def is_simple_greeting(message: str) -> bool:
-    return bool(re.fullmatch(r"\s*(?:hello|helo|hi|hey|yo|there)[.!?,\s]*", message))
+    cleaned = re.sub(r"\s+", " ", readable_game_text(message).lower()).strip(" .!,?")
+    return bool(re.fullmatch(r"(?:hello|helo|hi|hey|yo|there)(?:\s+(?:azele|girl|you))?", cleaned))
+
+
+def is_lightweight_party_chat_context(message: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", readable_game_text(message).lower()).strip(" .!,?")
+    if not cleaned:
+        return False
+    return bool(
+        is_simple_greeting(cleaned)
+        or is_player_checkin(cleaned)
+        or re.fullmatch(r"(?:gl|good luck|gz|grats?|congrats?|congratulations|ty|ty all|thanks|thank you|thanks all)", cleaned)
+    )
 
 
 def is_player_checkin(message: str) -> bool:
@@ -3738,9 +3752,25 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return first_fresh_reply(
             [
                 "Hey. I’m here.",
-                "Hey. What are we doing?",
-                "Hi. I’m listening.",
+                "Hey. Good to hear you.",
+                "Hi. I’m with you.",
                 "There you are. What’s up?",
+            ]
+        )
+    if re.fullmatch(r"\s*(?:gl|good luck)[.!?,\s]*", message):
+        return first_fresh_reply(
+            [
+                "Good luck to us, then. Stay sharp.",
+                "We’ll take the luck. I’ll bring the stubborn part.",
+                "Thanks. Keep close and we’ll make it count.",
+            ]
+        )
+    if re.fullmatch(r"\s*(?:gz|grats?|congrats?|congratulations)[.!?,\s]*", message):
+        return first_fresh_reply(
+            [
+                "Thanks. I’m trying not to look too pleased about it.",
+                "Thank you. That felt good, actually.",
+                "Thanks. Stronger every step, right?",
             ]
         )
     if re.search(r"^(ready|go)$|\b(let'?s go|ready now|i'?m ready|im ready)\b", message):
