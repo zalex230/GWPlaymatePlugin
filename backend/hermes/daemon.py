@@ -2191,8 +2191,8 @@ def first_fresh_reply(candidates: list[str]) -> str:
 def duplicate_recovery_reply() -> str:
     return first_fresh_reply(
         [
-            "I’m repeating myself. Resetting.",
-            "Right, I got stuck on that thought. New line.",
+            "Fair. I got stuck on that thought. Let me say it cleaner.",
+            "Right, that came out looped. I’m with you now.",
             "Fair. I heard myself loop. I’m with you now.",
         ]
     )
@@ -2872,7 +2872,7 @@ def azele_simple_ack_reply(message: str) -> str | None:
         return first_fresh_reply(
             [
                 "Yeah, I heard myself too. I’ll stop looping.",
-                "Right. I’m repeating myself. Resetting now.",
+                "Right. That came out looped. Let me answer you properly.",
                 "Fair. I got stuck on that thought. I’m with you.",
             ]
         )
@@ -3513,6 +3513,11 @@ AMBIENT_SCHEDULER_METAPHOR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+VISIBLE_SELF_MANAGEMENT_PATTERN = re.compile(
+    r"\b(?:resetting(?:\s+now)?|new line|system reset|resetting myself|retrying|regenerating)\b",
+    re.IGNORECASE,
+)
+
 
 def leaks_ambient_scheduler_metaphor(reply: str, event: TelemetryEvent) -> bool:
     if not is_ambient_snapshot_event(event):
@@ -3520,10 +3525,16 @@ def leaks_ambient_scheduler_metaphor(reply: str, event: TelemetryEvent) -> bool:
     return bool(AMBIENT_SCHEDULER_METAPHOR_PATTERN.search(reply or ""))
 
 
+def leaks_visible_self_management(reply: str) -> bool:
+    return bool(VISIBLE_SELF_MANAGEMENT_PATTERN.search(reply or ""))
+
+
 def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
     reply = repair_model_reply(reply)
     if leaks_ambient_scheduler_metaphor(reply, event):
         raise ValueError("leaked ambient scheduler metaphor")
+    if leaks_visible_self_management(reply):
+        raise ValueError("leaked self-management phrase")
     if re.search(r"\b(kid|tasty|elemental fun|dance in flames)\b", reply, re.IGNORECASE):
         raise ValueError("bad style model reply")
     if FILLER_ONLY_REPLY_PATTERN.search(reply):
@@ -3626,6 +3637,7 @@ def character_reply_with_ollama(
             "overlong model reply",
             "misdirected voice reply",
             "leaked ambient scheduler metaphor",
+            "leaked self-management phrase",
         }:
             retry_exc: Exception | None = None
             retry_started_at = time.perf_counter()

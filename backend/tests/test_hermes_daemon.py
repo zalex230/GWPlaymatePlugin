@@ -1109,6 +1109,19 @@ class HermesDaemonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missed clear player intent"):
             validate_model_reply("Yeah, I’m here. What are we doing?", event)
 
+    def test_model_reply_rejects_visible_self_management_phrase(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "you are repeating yourself",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "self-management"):
+            validate_model_reply("Right. I’m repeating myself. Resetting now.", event)
+
     def test_fallback_acknowledges_odd_previous_generic_response(self) -> None:
         recent_reply_texts.append("Yeah, I’m here. What are we doing?")
         event = event_from_game_log(
@@ -2533,6 +2546,23 @@ class HermesDaemonTests(unittest.TestCase):
         )
 
         self.assertNotEqual(decision.response, "Hey. I’m here.")
+
+    def test_azele_repeat_fallback_does_not_say_resetting(self) -> None:
+        decision = fallback_rule_decision(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "you are repeating yourself",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertTrue(decision.should_speak)
+        self.assertNotIn("resetting", decision.response.lower())
+        self.assertNotIn("new line", decision.response.lower())
+        self.assertRegex(decision.response.lower(), r"loop|stuck|heard|properly|with you")
 
     def test_azele_fallback_answers_dwarven_ale_consumable_roleplay(self) -> None:
         decision = fallback_rule_decision(
