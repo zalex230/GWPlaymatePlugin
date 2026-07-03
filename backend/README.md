@@ -96,7 +96,7 @@ For stable local voice, run a Kokoro-compatible TTS server on the Mac Mini and s
 ```bash
 HERMES_TTS_PROVIDER=kokoro
 KOKORO_TTS_URL=http://127.0.0.1:8880/v1/audio/speech
-KOKORO_TTS_VOICE=af_bella
+KOKORO_TTS_VOICE=af_heart
 HERMES_TTS_STORAGE_BUCKET=playmate-tts
 HERMES_TTS_SIGNED_URL_SECONDS=600
 ```

@@ -246,14 +246,14 @@ class HermesDaemonTests(unittest.TestCase):
                 original_settings,
                 hermes_tts_provider="chatterbox-turbo",
                 chatterbox_tts_voice_sample="/tmp/azele.wav",
-                kokoro_tts_voice="af_bella",
+                kokoro_tts_voice="af_heart",
             )
             hermes_daemon.generate_chatterbox_turbo_audio = lambda text, expression: None
             hermes_daemon.generate_kokoro_audio = lambda text: (b"kokoro", "audio/mpeg")
 
             self.assertEqual(
                 generate_tts_audio("hello", expression="neutral"),
-                (b"kokoro", "audio/mpeg", "kokoro", "af_bella"),
+                (b"kokoro", "audio/mpeg", "kokoro", "af_heart"),
             )
 
             hermes_daemon.generate_chatterbox_turbo_audio = lambda text, expression: (b"turbo", "audio/wav")
