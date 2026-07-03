@@ -816,6 +816,50 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(context.canonical_topic, "The Scourge Beneath")
         self.assertGreaterEqual(context.confidence, 0.9)
 
+    def test_gw1_resolver_maps_duke_gaban_search(self) -> None:
+        recent_context = "[Player]: where is Duke Gaban?"
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hes somewhere here in the catacombs. can you think of spots where he might be?",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 145,
+                    "map_name": "The Catacombs",
+                },
+            }
+        )
+
+        context = resolve_gw1_context(event, recent_context)
+
+        self.assertEqual(context.intent, "quest")
+        self.assertEqual(context.canonical_topic, "Vanguard Rescue: Save the Ascalonian Noble")
+        self.assertGreaterEqual(context.confidence, 0.9)
+
+    def test_duke_gaban_search_uses_quest_specific_fast_reply(self) -> None:
+        world_state.recent_chat_history.append("[Player]: where is Duke Gaban?")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hes somewhere here in the catacombs. can you think of spots where he might be?",
+                "payload": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 145,
+                    "map_name": "The Catacombs",
+                },
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(should_use_fast_fallback_before_ollama(event))
+        self.assertRegex(reply.response.lower(), r"gaban|side|chamber|alcove|dead-end|catacombs|escort|search")
+        self.assertNotRegex(reply.response.lower(), r"first pull|tunnels it is|wrap around|keep it tight")
+
     def test_gw1_resolver_understands_common_pre_searing_slang(self) -> None:
         cases = [
             ("what's the LDoA plan?", "Legendary Defender of Ascalon"),
@@ -1472,6 +1516,27 @@ class HermesDaemonTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "missed clear player intent"):
             validate_model_reply("I’m listening. What’s up?", event)
+
+    def test_model_reply_accepts_duke_gaban_search_answer(self) -> None:
+        world_state.recent_chat_history.append("[Player]: where is Duke Gaban?")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hes somewhere here in the catacombs. can you think of spots where he might be?",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_id": 145,
+                    "map_name": "The Catacombs",
+                },
+            }
+        )
+
+        self.assertEqual(
+            validate_model_reply("Duke Gaban is probably tucked into a side chamber or dead-end path. We should search those first.", event),
+            "Duke Gaban is probably tucked into a side chamber or dead-end path. We should search those first.",
+        )
 
     def test_model_reply_rejects_scourge_beneath_intent_miss(self) -> None:
         event = event_from_game_log(

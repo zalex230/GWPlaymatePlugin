@@ -1849,7 +1849,10 @@ def should_use_fast_fallback_before_ollama(event: TelemetryEvent) -> bool:
         return True
     if is_recent_combat_reflection_context(event.message):
         return True
-    context = resolve_gw1_context(event)
+    recent_context = recent_conversation_context(limit=6)
+    if is_duke_gaban_search_context(event.message, event, recent_context):
+        return True
+    context = resolve_gw1_context(event, recent_context)
     return context.matched and context.confidence >= 0.88 and context.entry_id in {
         "quest.scourge_beneath",
         "title.ldoa",
@@ -1859,6 +1862,7 @@ def should_use_fast_fallback_before_ollama(event: TelemetryEvent) -> bool:
         "item.red_iris",
         "gear.krytan_leggings",
         "npc.devona_pet",
+        "quest.vanguard_rescue_gaban",
     }
 
 
@@ -2597,6 +2601,9 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
     if event.event_type != "player_chat" or event.channel != "party":
         return False
     message = readable_game_text(event.message)
+    recent_context = recent_conversation_context(limit=6)
+    if is_duke_gaban_search_context(message, event, recent_context):
+        return not re.search(r"\b(?:gaban|duke|noble|catacombs?|search|look|check|escort|alcove|side|chamber|path|corner)\b", reply, re.IGNORECASE)
     if is_alcohol_consumable_context(message):
         return not re.search(
             r"\b(?:ale|drink|drank|drunk|tipsy|warm|fifteen|15|feel|head|floor|city|stairs)\b",
@@ -2874,8 +2881,53 @@ def azele_scourge_beneath_reply(message: str) -> str:
     )
 
 
+def context_mentions_duke_gaban(recent_context: str | None = None) -> bool:
+    haystack = recent_context or "\n".join(
+        [
+            *list(world_state.recent_chat_history)[-6:],
+            *list(recent_reply_texts)[-6:],
+        ]
+    )
+    return bool(re.search(r"\b(?:duke\s+)?gaban\b|\bascalonian noble\b", haystack, re.IGNORECASE))
+
+
+def is_duke_gaban_search_context(message: str, event: TelemetryEvent | None = None, recent_context: str | None = None) -> bool:
+    lowered = readable_game_text(message).lower()
+    explicit_gaban = bool(re.search(r"\b(?:duke\s+)?gaban\b|\bascalonian noble\b", lowered))
+    searchish = bool(re.search(r"\b(?:where|spots?|might|could|think|find|look|search|hide|hiding|somewhere|save|escort)\b", lowered))
+    if explicit_gaban and searchish:
+        return True
+    map_name = map_area_label(event).lower() if event is not None else ""
+    catacombs_context = "catacombs" in lowered or "catacombs" in map_name or (event is not None and event.map_id in {145, 151})
+    if explicit_gaban:
+        return catacombs_context
+    pronoun_followup = bool(re.search(r"\b(?:he|him|his)\b", lowered))
+    return bool(pronoun_followup and searchish and catacombs_context and context_mentions_duke_gaban(recent_context))
+
+
+def azele_duke_gaban_search_reply(message: str) -> str:
+    lowered = readable_game_text(message).lower()
+    if re.search(r"\bwhere\b", lowered):
+        return first_fresh_reply(
+            [
+                "He is in the Catacombs somewhere. I would sweep side chambers and dead ends, then be ready to escort him out.",
+                "For Duke Gaban, check the side paths and little chambers first. Nobles do love getting stuck somewhere awkward.",
+                "Somewhere in these Catacombs. We should search the side rooms, not just barrel down the main path.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "If he is hiding down here, I would check side chambers, alcoves, and any dead-end path before pushing deeper.",
+            "Start with side rooms and corners off the main route. If Gaban is scared, he will not be standing in the open.",
+            "I would sweep the side passages first. Find Gaban, then keep him close on the escort out.",
+        ]
+    )
+
+
 def is_tunnel_plan_context(message: str) -> bool:
     lowered = readable_game_text(message).lower()
+    if is_duke_gaban_search_context(lowered):
+        return False
     return bool(re.search(r"\b(?:tunnels?|catacombs|forsaken tunnels|scourge beneath)\b", lowered))
 
 
@@ -3063,6 +3115,8 @@ def azele_gw1_context_reply(context: ResolvedGameContext, event: TelemetryEvent)
         )
     if context.entry_id == "npc.devona_pet":
         return azele_devona_pet_reply(message)
+    if context.entry_id == "quest.vanguard_rescue_gaban":
+        return azele_duke_gaban_search_reply(message)
     return None
 
 

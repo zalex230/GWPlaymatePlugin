@@ -156,6 +156,24 @@ GW1_KNOWLEDGE: tuple[KnowledgeEntry, ...] = (
         confidence=0.83,
     ),
     KnowledgeEntry(
+        id="quest.vanguard_rescue_gaban",
+        canonical_name="Vanguard Rescue: Save the Ascalonian Noble",
+        aliases=(
+            "duke gaban",
+            "gaban",
+            "save duke gaban",
+            "save the ascalonian noble",
+            "ascalonian noble",
+            "vanguard rescue",
+            "where is duke gaban",
+        ),
+        category="quest",
+        era_scope="pre_searing",
+        response_anchors=("Duke Gaban", "Catacombs", "search", "escort"),
+        tags=("catacombs", "vanguard", "rescue", "ascalon"),
+        confidence=0.9,
+    ),
+    KnowledgeEntry(
         id="map.ascalon_city",
         canonical_name="Ascalon City",
         aliases=("ascalon city", "ascalon", "city"),
@@ -218,6 +236,22 @@ def _alias_matches(alias: str, text: str) -> bool:
     return bool(re.search(rf"(?<!\w){escaped}(?!\w)", text))
 
 
+def _find_entry(entry_id: str) -> KnowledgeEntry | None:
+    for entry in GW1_KNOWLEDGE:
+        if entry.id == entry_id:
+            return entry
+    return None
+
+
+def _looks_like_gaban_followup(message_text: str, event_text: str, recent_text: str) -> bool:
+    if not re.search(r"\b(?:duke\s+)?gaban\b|\bascalonian noble\b", recent_text):
+        return False
+    if not re.search(r"\b(?:he|him|his|somewhere|spots?|where|find|look|search|hide|hiding|might|could|think)\b", message_text):
+        return False
+    combined = f"{message_text} {event_text}"
+    return bool(re.search(r"\bcatacombs?\b", combined) or re.search(r"\b(?:map_id|area_id)\s*[:=]?\s*(?:145|151)\b", combined))
+
+
 def resolve_gw1_context(event: Any, recent_context: str | Iterable[str] | None = None) -> ResolvedGameContext:
     message_text = _read_text(getattr(event, "message", "")).lower()
     event_text = _event_context_text(event)
@@ -225,6 +259,21 @@ def resolve_gw1_context(event: Any, recent_context: str | Iterable[str] | None =
     combined_text = " ".join(part for part in (message_text, event_text, recent_text) if part)
     if not combined_text:
         return ResolvedGameContext(intent="unknown", canonical_topic="")
+
+    gaban_entry = _find_entry("quest.vanguard_rescue_gaban")
+    if gaban_entry and _looks_like_gaban_followup(message_text, event_text, recent_text):
+        score = min(gaban_entry.confidence + 0.06 + _pre_searing_score(event, combined_text), 0.99)
+        return ResolvedGameContext(
+            intent=gaban_entry.category,
+            canonical_topic=gaban_entry.canonical_name,
+            aliases=gaban_entry.aliases,
+            response_anchors=gaban_entry.response_anchors,
+            era_scope=gaban_entry.era_scope,
+            confidence=score,
+            entry_id=gaban_entry.id,
+            category=gaban_entry.category,
+            tags=gaban_entry.tags,
+        )
 
     best: tuple[float, KnowledgeEntry, str] | None = None
     for entry in GW1_KNOWLEDGE:
