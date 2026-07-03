@@ -3418,6 +3418,30 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
     return reply
 
 
+def salvage_complete_model_reply(reply: str, event: TelemetryEvent) -> str | None:
+    cleaned = repair_model_reply(reply)
+    if not cleaned:
+        return None
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", cleaned) if part.strip()]
+    if len(sentences) <= 1:
+        return None
+
+    best_valid: str | None = None
+    prefix: list[str] = []
+    for sentence in sentences:
+        prefix.append(sentence)
+        candidate = " ".join(prefix).strip()
+        if candidate == cleaned:
+            break
+        if not re.search(r"[.!?]$", candidate):
+            continue
+        try:
+            best_valid = validate_model_reply(candidate, event)
+        except Exception:
+            continue
+    return best_valid
+
+
 def repair_model_reply(reply: str) -> str:
     cleaned = re.sub(r"\s+", " ", reply or "").strip()
     cleaned = re.sub(r"\bWhat['’]?ve\s+got\b", "What's got", cleaned, flags=re.IGNORECASE)
@@ -3453,23 +3477,48 @@ def character_reply_with_ollama(
             flush=True,
         )
         if str(exc) in {"missed clear player intent", "bad shape model reply", "repeated recent reply"}:
+            retry_exc: Exception | None = None
             retry_started_at = time.perf_counter()
             retry_prompt = build_player_intent_retry_prompt(event, cleaned, str(exc))
-            retry_response = ollama_generate_visible(retry_prompt, timeout_seconds=timeout_seconds, num_predict=num_predict)
-            retry_elapsed = time.perf_counter() - retry_started_at
-            retry_cleaned = clean_model_reply(retry_response)
-            retry_reply = validate_model_reply(retry_cleaned, event)
-            print(
-                f"Ollama character reply intent retry accepted in {retry_elapsed:.2f}s "
-                f"for {event_debug_label(event, record_id=record_id)}.",
-                flush=True,
-            )
-            return HermesDecision(
-                should_speak=True,
-                channel_override="CHANNEL_PARTY",
-                urgency="NORMAL",
-                response=retry_reply,
-            )
+            try:
+                retry_response = ollama_generate_visible(retry_prompt, timeout_seconds=timeout_seconds, num_predict=num_predict)
+                retry_elapsed = time.perf_counter() - retry_started_at
+                retry_cleaned = clean_model_reply(retry_response)
+                retry_reply = validate_model_reply(retry_cleaned, event)
+                print(
+                    f"Ollama character reply intent retry accepted in {retry_elapsed:.2f}s "
+                    f"for {event_debug_label(event, record_id=record_id)}.",
+                    flush=True,
+                )
+                return HermesDecision(
+                    should_speak=True,
+                    channel_override="CHANNEL_PARTY",
+                    urgency="NORMAL",
+                    response=retry_reply,
+                )
+            except Exception as retry_error:
+                retry_exc = retry_error
+                print(
+                    f"Ollama character reply retry rejected for {event_debug_label(event, record_id=record_id)} "
+                    f"({type(retry_error).__name__}: {retry_error}).",
+                    flush=True,
+                )
+
+            salvage = salvage_complete_model_reply(cleaned, event)
+            if salvage:
+                print(
+                    f"Ollama character reply salvaged complete prefix after retry failure "
+                    f"for {event_debug_label(event, record_id=record_id)}.",
+                    flush=True,
+                )
+                return HermesDecision(
+                    should_speak=True,
+                    channel_override="CHANNEL_PARTY",
+                    urgency="NORMAL",
+                    response=salvage,
+                )
+            if retry_exc is not None:
+                raise retry_exc
         raise
     return HermesDecision(
         should_speak=True,

@@ -1632,6 +1632,49 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("bad shape model reply", prompts[1])
         self.assertIn("Finish the thought cleanly", prompts[1])
 
+    def test_character_reply_salvages_complete_prefix_when_retry_fails(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "more like, we'll be doing the hunting, thank you very much",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_name": "Ascalon City",
+                },
+            }
+        )
+        prompts: list[str] = []
+        responses = iter(
+            [
+                "Hah, finally someone who gets it. Hunting is better than patrolling when there are no threats around yet. But",
+                "Yeah",
+            ]
+        )
+        original_generate = hermes_daemon.ollama_generate_visible
+        try:
+            def fake_generate(
+                prompt: str,
+                *,
+                timeout_seconds: float | None = None,
+                num_predict: int | None = None,
+            ) -> str:
+                prompts.append(prompt)
+                return next(responses)
+
+            hermes_daemon.ollama_generate_visible = fake_generate
+            decision = hermes_daemon.character_reply_with_ollama(event, timeout_seconds=1.0, num_predict=96, record_id=2175)
+        finally:
+            hermes_daemon.ollama_generate_visible = original_generate
+
+        self.assertEqual(
+            decision.response,
+            "Hah, finally someone who gets it. Hunting is better than patrolling when there are no threats around yet.",
+        )
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("bad shape model reply", prompts[1])
+
     def test_flirty_player_chat_prompt_prioritizes_social_intent(self) -> None:
         prompt = build_character_reply_prompt(
             event_from_game_log(
