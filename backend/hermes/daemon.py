@@ -1616,6 +1616,20 @@ def build_decision_prompt(event: TelemetryEvent) -> str:
     )
 
 
+def build_player_intent_retry_prompt(event: TelemetryEvent, rejected_reply: str, reason: str) -> str:
+    return (
+        build_character_reply_prompt(event)
+        + "\n\n"
+        "Retry instruction:\n"
+        f"- The previous draft was rejected because it {reason}.\n"
+        f"- Rejected draft: {rejected_reply!r}\n"
+        "- Replace it with one direct reply to the player's actual latest message.\n"
+        "- Anchor on the nouns, pronouns, question, joke, correction, or plan in the latest player message and recent transcript.\n"
+        "- Do not answer a different topic. Do not use a generic check-in.\n"
+        "Return only Azele's corrected reply."
+    )
+
+
 def clean_model_reply(text: str) -> str:
     cleaned = text.strip()
     if "...done thinking." in cleaned:
@@ -3392,7 +3406,8 @@ def character_reply_with_ollama(
     record_id: int | None = None,
 ) -> HermesDecision:
     started_at = time.perf_counter()
-    response = ollama_generate_visible(build_character_reply_prompt(event), timeout_seconds=timeout_seconds)
+    base_prompt = build_character_reply_prompt(event)
+    response = ollama_generate_visible(base_prompt, timeout_seconds=timeout_seconds)
     elapsed = time.perf_counter() - started_at
     print(
         f"Ollama character reply generated in {elapsed:.2f}s "
@@ -3409,6 +3424,24 @@ def character_reply_with_ollama(
             f"({type(exc).__name__}: {exc}): {preview!r}",
             flush=True,
         )
+        if str(exc) == "missed clear player intent":
+            retry_started_at = time.perf_counter()
+            retry_prompt = build_player_intent_retry_prompt(event, cleaned, str(exc))
+            retry_response = ollama_generate_visible(retry_prompt, timeout_seconds=timeout_seconds)
+            retry_elapsed = time.perf_counter() - retry_started_at
+            retry_cleaned = clean_model_reply(retry_response)
+            retry_reply = validate_model_reply(retry_cleaned, event)
+            print(
+                f"Ollama character reply intent retry accepted in {retry_elapsed:.2f}s "
+                f"for {event_debug_label(event, record_id=record_id)}.",
+                flush=True,
+            )
+            return HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="NORMAL",
+                response=retry_reply,
+            )
         raise
     return HermesDecision(
         should_speak=True,

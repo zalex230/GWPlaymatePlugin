@@ -1517,6 +1517,43 @@ class HermesDaemonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missed clear player intent"):
             validate_model_reply("I’m listening. What’s up?", event)
 
+    def test_character_reply_retries_when_model_misses_player_intent(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "alright. let's get you to level 14. we're pretty close! head past the gates and lets hunt some charr",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_name": "Lakeside County",
+                },
+            }
+        )
+        prompts: list[str] = []
+        responses = iter(
+            [
+                "Lakeside again. Reminds me of my first few errands here.",
+                "Yes. Charr threaten Ascalon. We prepare, then head past the gate.",
+            ]
+        )
+        original_generate = hermes_daemon.ollama_generate_visible
+        try:
+            def fake_generate(prompt: str, *, timeout_seconds: float | None = None) -> str:
+                prompts.append(prompt)
+                return next(responses)
+
+            hermes_daemon.ollama_generate_visible = fake_generate
+            decision = hermes_daemon.character_reply_with_ollama(event, timeout_seconds=1.0, record_id=123)
+        finally:
+            hermes_daemon.ollama_generate_visible = original_generate
+
+        self.assertEqual(decision.response, "Yes. Charr threaten Ascalon. We prepare, then head past the gate.")
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("Retry instruction", prompts[1])
+        self.assertIn("missed clear player intent", prompts[1])
+        self.assertIn("Lakeside again", prompts[1])
+
     def test_model_reply_accepts_duke_gaban_search_answer(self) -> None:
         world_state.recent_chat_history.append("[Player]: where is Duke Gaban?")
         event = event_from_game_log(
