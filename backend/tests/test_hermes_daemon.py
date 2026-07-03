@@ -3277,6 +3277,8 @@ class HermesDaemonTests(unittest.TestCase):
             hermes_daemon.create_supabase_client = original_create_client
 
     def test_map_entry_silent_after_recent_player_chat(self) -> None:
+        world_state.map_id = 147
+        world_state.map_name = "The Northlands"
         world_state.last_player_chat_at = time.time()
 
         replies = process_event(
@@ -3298,6 +3300,35 @@ class HermesDaemonTests(unittest.TestCase):
         )
 
         self.assertEqual(replies, [])
+
+    def test_map_entry_speaks_after_recent_player_chat_when_map_changed(self) -> None:
+        world_state.persona = "Azele"
+        world_state.session_id = "recent-chat-map-transition"
+        world_state.map_id = 148
+        world_state.map_name = "Ascalon City"
+        world_state.last_player_chat_at = time.time()
+        world_state.last_spoken_at = time.time()
+
+        replies = process_event(
+            event_from_game_log(
+                {
+                    "sender": "System",
+                    "channel": "system",
+                    "message": "map_loaded",
+                    "metadata": {
+                        "event_type": "map_loaded",
+                        "persona": "Azele",
+                        "session_id": "recent-chat-map-transition",
+                        "map_id": 779,
+                        "map_name": "Piken Square",
+                    },
+                }
+            ),
+            use_ollama=False,
+        )
+
+        self.assertEqual(len(replies), 1)
+        self.assertRegex(replies[0].message.lower(), r"piken|bearings|new ground")
 
     def test_ambient_heartbeat_uses_ollama_when_enabled(self) -> None:
         now = time.time()

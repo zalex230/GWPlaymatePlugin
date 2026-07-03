@@ -4642,6 +4642,7 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
     with world_state_lock:
         if should_ignore_radar_alert(event):
             return []
+        previous_map_id = world_state.map_id
         world_state.apply_event(event)
         player_chat_at_generation_start = world_state.last_player_chat_at
 
@@ -4654,6 +4655,7 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
             readable_game_text(getattr(event, "agent_name", "")) or has_visible_enemy_context(event)
         )
         is_map_entry = event.event_type in MAP_COMMENT_EVENT_TYPES and bool(event.map_id)
+        actual_map_transition = bool(is_map_entry and previous_map_id and previous_map_id != event.map_id)
         if is_unknown_quest_change:
             record_memory_event(event, record_id=record_id)
             return []
@@ -4671,10 +4673,12 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
                 world_state.last_player_chat_at > 0
                 and time.time() - world_state.last_player_chat_at < MAP_ENTRY_AFTER_PLAYER_CHAT_QUIET_SECONDS
             )
-            if recent_player_chat or last_map_comment_by_session.get(map_comment_key) == event.map_id:
+            duplicate_map_entry = last_map_comment_by_session.get(map_comment_key) == event.map_id
+            recent_chat_blocks_entry = recent_player_chat and not actual_map_transition
+            if recent_chat_blocks_entry or duplicate_map_entry:
                 should_speak_now = False
             else:
-                should_speak_now = has_map_name and world_state.can_speak(20.0)
+                should_speak_now = has_map_name and (actual_map_transition or world_state.can_speak(20.0))
                 if should_speak_now:
                     last_map_comment_by_session[map_comment_key] = event.map_id
             persona = world_state.persona
