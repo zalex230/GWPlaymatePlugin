@@ -220,8 +220,8 @@ class HermesDaemonTests(unittest.TestCase):
         kokoro = hermes_daemon._kokoro_tts_payload(text)
         chatterbox = hermes_daemon._chatterbox_tts_payload(text, expression="happy")
 
-        self.assertEqual(kokoro["input"], "Azelle says As-kah-lon City is home, not Old As-kah-lon.")
-        self.assertEqual(chatterbox["input"], "Azelle says As-kah-lon City is home, not Old As-kah-lon.")
+        self.assertEqual(kokoro["input"], "Azelle says Ask-alon City is home, not Old Ask-alon.")
+        self.assertEqual(chatterbox["input"], "Azelle says Ask-alon City is home, not Old Ask-alon.")
         self.assertEqual(text, "Azele says Ascalon City is home, not Old Ascalon.")
 
     def test_chatterbox_tts_payload_uses_distinct_mood_profiles(self) -> None:

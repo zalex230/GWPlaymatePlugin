@@ -4042,7 +4042,7 @@ def reply_expression(text: str, urgency: str = "NORMAL") -> str:
 
 TTS_PRONUNCIATION_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bAzele\b", re.IGNORECASE), "Azelle"),
-    (re.compile(r"\bAscalon\b", re.IGNORECASE), "As-kah-lon"),
+    (re.compile(r"\bAscalon\b", re.IGNORECASE), "Ask-alon"),
 )
 
 
