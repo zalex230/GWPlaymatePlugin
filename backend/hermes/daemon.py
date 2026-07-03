@@ -4235,20 +4235,29 @@ def tts_pronunciation_text(text: str) -> str:
     return spoken
 
 
-def _kokoro_tts_payload(text: str) -> dict[str, Any]:
+def kokoro_tts_voice_for_persona(persona: str | None = None) -> str:
+    persona_key = known_persona_name(persona or "").lower()
+    if persona_key == "azele":
+        return "af_heart"
+    if persona_key == "meliora andru":
+        return "af_bella"
+    return settings.kokoro_tts_voice
+
+
+def _kokoro_tts_payload(text: str, *, persona: str | None = None, voice: str | None = None) -> dict[str, Any]:
     return {
         "model": settings.kokoro_tts_model,
         "input": tts_pronunciation_text(text),
-        "voice": settings.kokoro_tts_voice,
+        "voice": voice or kokoro_tts_voice_for_persona(persona),
         "response_format": settings.kokoro_tts_format,
     }
 
 
-def generate_kokoro_audio(text: str) -> tuple[bytes, str] | None:
+def generate_kokoro_audio(text: str, *, persona: str | None = None) -> tuple[bytes, str] | None:
     if not text.strip():
         return None
 
-    body = json.dumps(_kokoro_tts_payload(text)).encode("utf-8")
+    body = json.dumps(_kokoro_tts_payload(text, persona=persona)).encode("utf-8")
     request = urllib.request.Request(
         settings.kokoro_tts_url,
         data=body,
@@ -4309,23 +4318,23 @@ def generate_chatterbox_turbo_audio(text: str, *, expression: str) -> tuple[byte
     return audio, _audio_mime_type(settings.chatterbox_tts_format)
 
 
-def generate_tts_audio(text: str, *, expression: str) -> tuple[bytes, str, str, str] | None:
+def generate_tts_audio(text: str, *, expression: str, persona: str | None = None) -> tuple[bytes, str, str, str] | None:
     provider = settings.hermes_tts_provider
     if provider in {"chatterbox-turbo", "chatterbox_turbo"}:
         generated = generate_chatterbox_turbo_audio(text, expression=expression)
         if generated:
             audio, mime_type = generated
             return audio, mime_type, "chatterbox-turbo", settings.chatterbox_tts_voice_sample
-        generated = generate_kokoro_audio(text)
+        generated = generate_kokoro_audio(text, persona=persona)
         if generated:
             audio, mime_type = generated
-            return audio, mime_type, "kokoro", settings.kokoro_tts_voice
+            return audio, mime_type, "kokoro", kokoro_tts_voice_for_persona(persona)
         return None
     if provider in {"kokoro", "kokoro-local"}:
-        generated = generate_kokoro_audio(text)
+        generated = generate_kokoro_audio(text, persona=persona)
         if generated:
             audio, mime_type = generated
-            return audio, mime_type, provider, settings.kokoro_tts_voice
+            return audio, mime_type, provider, kokoro_tts_voice_for_persona(persona)
     return None
 
 
@@ -4372,7 +4381,7 @@ def attach_tts_audio(reply: CompanionReplyInsert) -> CompanionReplyInsert:
         return reply
 
     try:
-        generated = generate_tts_audio(reply.message, expression=expression)
+        generated = generate_tts_audio(reply.message, expression=expression, persona=reply.persona)
         if not generated:
             return reply.model_copy(update={"metadata": {**reply.metadata, "tts_error": "audio_generation_unavailable"}})
         audio, mime_type, provider, voice = generated

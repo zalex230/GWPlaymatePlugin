@@ -225,6 +225,17 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(chatterbox["input"], "Humph, Azelle says Ask-alon City is home, not Old Ask-alon.")
         self.assertEqual(text, "Hmph, Azele says Ascalon City is home, not Old Ascalon.")
 
+    def test_kokoro_tts_voice_routes_by_persona(self) -> None:
+        original_settings = hermes_daemon.settings
+        try:
+            hermes_daemon.settings = replace(original_settings, kokoro_tts_voice="af_default")
+
+            self.assertEqual(hermes_daemon._kokoro_tts_payload("hi", persona="Azele")["voice"], "af_heart")
+            self.assertEqual(hermes_daemon._kokoro_tts_payload("hi", persona="Meliora Andru")["voice"], "af_bella")
+            self.assertEqual(hermes_daemon._kokoro_tts_payload("hi", persona="Other Character")["voice"], "af_default")
+        finally:
+            hermes_daemon.settings = original_settings
+
     def test_chatterbox_tts_payload_uses_distinct_mood_profiles(self) -> None:
         angry = hermes_daemon._chatterbox_tts_payload("Charr at the gate.", expression="angry")
         flirty = hermes_daemon._chatterbox_tts_payload("You noticed?", expression="flirty")
@@ -250,11 +261,15 @@ class HermesDaemonTests(unittest.TestCase):
                 kokoro_tts_voice="af_heart",
             )
             hermes_daemon.generate_chatterbox_turbo_audio = lambda text, expression: None
-            hermes_daemon.generate_kokoro_audio = lambda text: (b"kokoro", "audio/mpeg")
+            hermes_daemon.generate_kokoro_audio = lambda text, persona=None: (b"kokoro", "audio/mpeg")
 
             self.assertEqual(
-                generate_tts_audio("hello", expression="neutral"),
+                generate_tts_audio("hello", expression="neutral", persona="Azele"),
                 (b"kokoro", "audio/mpeg", "kokoro", "af_heart"),
+            )
+            self.assertEqual(
+                generate_tts_audio("hello", expression="neutral", persona="Meliora Andru"),
+                (b"kokoro", "audio/mpeg", "kokoro", "af_bella"),
             )
 
             hermes_daemon.generate_chatterbox_turbo_audio = lambda text, expression: (b"turbo", "audio/wav")
@@ -293,7 +308,7 @@ class HermesDaemonTests(unittest.TestCase):
                 supabase_url="https://example.supabase.co",
                 supabase_service_key="service-key",
             )
-            hermes_daemon.generate_tts_audio = lambda text, expression: None
+            hermes_daemon.generate_tts_audio = lambda text, expression, persona=None: None
 
             reply = hermes_daemon.attach_tts_audio(
                 CompanionReplyInsert(persona="Azele", message="I know. Still nice to hear.", urgency="NORMAL")
@@ -317,7 +332,7 @@ class HermesDaemonTests(unittest.TestCase):
                 supabase_url="https://example.supabase.co",
                 supabase_service_key="service-key",
             )
-            hermes_daemon.generate_tts_audio = lambda text, expression: None
+            hermes_daemon.generate_tts_audio = lambda text, expression, persona=None: None
 
             def fail_if_called(settings: object) -> object:
                 raise AssertionError("text-only voice reply should not be inserted")
@@ -359,7 +374,7 @@ class HermesDaemonTests(unittest.TestCase):
                 supabase_url="https://example.supabase.co",
                 supabase_service_key="service-key",
             )
-            hermes_daemon.generate_tts_audio = lambda text, expression: None
+            hermes_daemon.generate_tts_audio = lambda text, expression, persona=None: None
             hermes_daemon.create_supabase_client = lambda settings: FakeClient()
 
             inserted = hermes_daemon.insert_reply(
