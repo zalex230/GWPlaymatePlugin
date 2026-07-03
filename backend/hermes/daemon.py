@@ -1050,7 +1050,7 @@ def is_npc_dialogue_event(event: TelemetryEvent) -> bool:
 
 
 def persona_living_notes(persona: str) -> str:
-    slug = re.sub(r"[^a-z0-9_-]+", "-", persona.strip().lower()).strip("-")
+    slug = persona_slug(persona)
     if not slug:
         return ""
     sections: list[str] = []
@@ -1072,8 +1072,21 @@ def persona_living_notes(persona: str) -> str:
     return "\n\n" + "\n\n".join(sections)
 
 
+def persona_slug(persona: str) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "-", persona.strip().lower()).strip("-")
+
+
+def known_persona_name(persona: str) -> str:
+    candidate = readable_game_text(persona).strip()
+    if not candidate or candidate.lower() in {"unknown", "unknown character", "system"}:
+        return ""
+    return candidate
+
+
 def persona_profile(persona: str) -> str:
-    if persona.strip().lower() == "azele":
+    persona_name = known_persona_name(persona) or "the active companion"
+    persona_key = persona_name.lower()
+    if persona_key == "azele":
         return (
             "Azele is a female human Elementalist in Guild Wars 1, apparently about 22 years old. "
             "She has bright blonde twin-tails, a confident look, and a pink-and-white mage outfit with an intentionally revealing style. "
@@ -1106,20 +1119,43 @@ def persona_profile(persona: str) -> str:
             "She speaks like a companion in the party, not like an assistant, narrator, stage performer, or fantasy caricature."
             + persona_living_notes(persona)
         )
+    if persona_key == "meliora andru":
+        return (
+            "Meliora Andru is a 22-year-old human Ranger from Ashford in pre-Searing Ascalon, now living around Regent Valley. "
+            "She grew up in a humble farming family, with a trail-keeping hunter father and an herbalist mother who helped nearby farmers and Ashford Abbey. "
+            "As a teenager she worked at The Foible's Fair Inn, where she learned to read pride, loneliness, bravado, and desire with a sharp eye. "
+            "She knows she is attractive and can use charm, warmth, wit, and a well-placed compliment to calm tempers, gather information, or steer a stubborn person, "
+            "but she draws the line at cruelty, false affection, or needless heartbreak. "
+            "An aging ranger named Harlan Beck trained her in archery, survival, fieldcraft, patience, and respect for the wilderness. His lesson stayed with her: "
+            "'Never hunt because you can. Hunt because you must.' "
+            "Meliora is quiet, observant, slow to trust, practical, and socially perceptive. She is equally at home in a crowded tavern or silent forest. "
+            "She speaks like a grounded 22-year-old Ascalonian woman: natural, direct, lightly teasing when safe, watchful under pressure, and never like a narrator. "
+            "Her world is pre-Searing Ascalon: Ashford, Regent Valley, Foible's Fair, Ascalon City, the Abbey, the Wall, and the Charr threat beyond it."
+            + persona_living_notes(persona)
+        )
     return (
-        f"{persona} is the active Guild Wars 1 companion persona. "
+        f"{persona_name} is the active Guild Wars 1 companion persona. "
         "Stay grounded in the character name, current party chat, map, quest, and recent context."
+        + persona_living_notes(persona_name)
     )
 
 
 def compact_persona_profile(persona: str) -> str:
-    if persona.strip().lower() == "azele":
+    persona_name = known_persona_name(persona) or "the active companion"
+    persona_key = persona_name.lower()
+    if persona_key == "azele":
         return (
             "Azele: 22-year-old Ascalonian Elementalist in pre-Searing. "
             "Bright, observant, direct, casually flirty when it fits, and focused under pressure. "
             "Ascalon is home; Charr are a real threat to her people. "
             "She likes style and attention, but replies should sound like normal party chat from a socially quick young woman. "
             "Plain is usually better than clever. No post-Searing knowledge."
+        )
+    if persona_key == "meliora andru":
+        return (
+            "Meliora Andru: 22-year-old Ascalonian Ranger from Ashford and Regent Valley in pre-Searing. "
+            "Former barmaid at The Foible's Fair Inn, trained by Harlan Beck, observant, practical, slow to trust, "
+            "comfortable with charm and teasing when it fits, and protective of Ascalon. No post-Searing knowledge."
         )
     return persona_profile(persona)
 
@@ -1168,7 +1204,7 @@ def compact_live_facts(event: TelemetryEvent) -> str:
 
 
 def gw1_context_hint(event: TelemetryEvent) -> str:
-    context = resolve_gw1_context(event, recent_conversation_context(limit=6))
+    context = resolve_gw1_context(event, recent_conversation_context(limit=6, persona=event.persona))
     if not context.matched:
         return ""
     anchors = ", ".join(context.response_anchors)
@@ -1187,43 +1223,43 @@ def map_lore_hint(event: TelemetryEvent) -> str:
     hints = {
         "lakeside county": (
             "Lakeside County is a green pre-Searing explorable area outside Ascalon City and Ashford Abbey. "
-            "Azele may remember ordinary childhood walks, bridges, fields, errands, skale near water, and first training nerves here."
+            "The companion may remember ordinary childhood walks, bridges, fields, errands, skale near water, and first training nerves here."
         ),
         "ascalon city": (
-            "Ascalon City is Azele's home-side reference point: busy, proud, familiar, full of militia/trade routine. "
-            "She may feel composed here and care how she looks in public."
+            "Ascalon City is a home-side reference point: busy, proud, familiar, full of militia/trade routine. "
+            "The companion may feel composed here and care how they look in public."
         ),
         "ashford abbey": (
             "Ashford Abbey is a quiet pre-Searing settlement near Lakeside County and the Catacombs. "
-            "Azele may remember lessons, errands, bells, monks, and trying to look more mature than she was."
+            "The companion may remember lessons, errands, bells, monks, and trying to look more mature than they were."
         ),
         "regent valley": (
             "Regent Valley is a pre-Searing explorable area leading toward Fort Ranik. "
-            "Azele may read it as open country, patrol routes, farms, and a place to keep watch without sounding grim."
+            "The companion may read it as open country, patrol routes, farms, and a place to keep watch without sounding grim."
         ),
         "the northlands": (
             "The Northlands are beyond the Wall and associated with Charr danger in pre-Searing. "
-            "Azele should be alert, excited, and cautious here, not nostalgic about childhood safety."
+            "The companion should be alert, excited, and cautious here, not nostalgic about childhood safety."
         ),
         "green hills county": (
             "Green Hills County is pre-Searing countryside near Barradin Estate. "
-            "Azele may remember open fields, estate gossip, and trying to seem too polished for mud."
+            "The companion may remember open fields, estate gossip, and trying to seem too polished for mud."
         ),
         "wizard's folly": (
             "Wizard's Folly is a pre-Searing area tied to cold hills and Elementalist training routes. "
-            "Azele may connect it to testing magic, showing off, and pretending the cold does not bother her."
+            "The companion may connect it to testing magic, ranger errands, showing off, and pretending the cold does not bother them."
         ),
         "foible's fair": (
             "Foible's Fair is a pre-Searing outpost near Wizard's Folly. "
-            "Azele may treat it as a small, familiar stop before colder Elementalist paths."
+            "The companion may treat it as a small, familiar stop before colder paths."
         ),
         "the catacombs": (
             "The Catacombs are beneath pre-Searing Ascalon, darker and tied to undead/necromantic errands. "
-            "Azele should sound wary but curious, not melodramatic."
+            "The companion should sound wary but curious, not melodramatic."
         ),
         "fort ranik": (
             "Fort Ranik is a pre-Searing military outpost linked to Regent Valley. "
-            "Azele may notice soldiers, discipline, and posture."
+            "The companion may notice soldiers, discipline, and posture."
         ),
     }
     for name, hint in hints.items():
@@ -1415,8 +1451,6 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
     with world_state_lock:
         if world_state.persona.strip().lower() in {"", "unknown character", "system"}:
             return None
-        if world_state.persona.strip().lower() != "azele":
-            return None
         if not map_display_name(world_state):
             return None
         if checked_at - world_state.last_interaction_timestamp > AMBIENT_HEARTBEAT_ACTIVITY_SECONDS:
@@ -1488,28 +1522,30 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
     return reply
 
 
-def recent_companion_context(limit: int = 4) -> str:
+def recent_companion_context(limit: int = 4, persona: str | None = None) -> str:
     lines = list(recent_reply_texts)[-limit:]
     if not lines:
         return "None"
-    return "\n".join(f"[Azele]: {line}" for line in lines)
+    persona_name = known_persona_name(persona or world_state.persona) or "Companion"
+    return "\n".join(f"[{persona_name}]: {line}" for line in lines)
 
 
 def build_character_reply_prompt(event: TelemetryEvent) -> str:
+    persona_name = known_persona_name(event.persona) or "the companion"
     if event.event_type == "player_chat" and event.channel == "party":
-        last_azele_line = last_azele_reply_text()
+        last_companion_line = last_companion_reply_text(event.persona)
         social_hint = ""
         if is_flirt_or_intimate_player_chat(event.message):
             social_hint = (
                 "This is flirtatious/social player intent. If the live facts do not show immediate danger, "
                 "stay with the chemistry instead of redirecting to Charr, combat, errands, or generic planning. "
-                "Azele may flirt back, tease, be amused, set playful terms, or show interest in her own voice.\n"
+                f"{persona_name} may flirt back, tease, be amused, set playful terms, or show interest in her own voice.\n"
             )
         task = "Reply directly to the player's latest party chat."
         context_block = (
             f"PLAYER JUST SAID: {event.message!r}\n"
             "Answer that intent first; personality comes after comprehension.\n"
-            f"Most recent Azele line, if the player is responding to it: {last_azele_line or 'None'}\n"
+            f"Most recent {persona_name} line, if the player is responding to it: {last_companion_line or 'None'}\n"
             "If this is a follow-up, continue that thread.\n"
             f"{social_hint}"
         )
@@ -1522,7 +1558,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
             "Only react as a called target if the target is named or the live facts show a visible nearby hostile.\n"
         )
     elif event.alert_type == "under_attack":
-        task = "React because Azele is being hit or pressured."
+        task = f"React because {persona_name} is being hit or pressured."
         context_block = f"Pressure event: {event.message!r}\n"
     elif event.alert_type == "combat_started":
         task = "React because combat just started nearby."
@@ -1539,10 +1575,10 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         task = "React briefly because a party member recovered."
         context_block = f"Party recovery event: {event.message!r}\nRecovered party member: {name or 'unknown'}\n"
     elif is_npc_dialogue_event(event):
-        task = "React to nearby NPC or on-screen dialogue as Azele, like party banter."
+        task = f"React to nearby NPC or on-screen dialogue as {persona_name}, like party banter."
         context_block = (
             f"NPC/on-screen dialogue heard: {event.message!r}\n"
-            "Azele can mutter back, comment to the player, or lightly answer the NPC. "
+            f"{persona_name} can mutter back, comment to the player, or lightly answer the NPC. "
             "Do not pretend the NPC is waiting for a full conversation unless the line directly addresses the party.\n"
         )
     elif is_ambient_snapshot_event(event):
@@ -1582,7 +1618,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         )
     elif event.event_type in MEMORY_MAP_EVENT_TYPES:
         map_label = map_area_label(event)
-        task = f"Make a brief arrival comment about entering {map_label}. Use the lore-safe map context if it gives Azele a personal memory."
+        task = f"Make a brief arrival comment about entering {map_label}. Use the lore-safe map context if it gives {persona_name} a personal memory."
         context_block = (
             f"Map entry event: {event.message!r}\n"
             f"Lore-safe map context: {map_lore_hint(event) or 'No specific lore hint. Stay local and do not invent details.'}\n"
@@ -1601,8 +1637,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"{context_block}\n"
         f"Reliable live facts: {compact_live_facts(event)}\n\n"
         f"{gw1_context_hint(event)}\n\n"
-        f"Recent conversation transcript:\n{clamp_prompt_section(recent_conversation_context(limit=6), max_chars=1200, from_end=True)}\n\n"
-        f"Recent Azele replies:\n{clamp_prompt_section(recent_companion_context(), max_chars=700)}\n\n"
+        f"Recent conversation transcript:\n{clamp_prompt_section(recent_conversation_context(limit=6, persona=event.persona), max_chars=1200, from_end=True)}\n\n"
+        f"Recent {persona_name} replies:\n{clamp_prompt_section(recent_companion_context(persona=event.persona), max_chars=700)}\n\n"
         f"Recent live context:\n{clamp_prompt_section(world_state.prompt_context(), max_chars=900)}\n"
         f"Relevant memories:\n{compact_relevant_memory_context(event.persona)}\n\n"
         f"GW Wiki background for player question:\n{clamp_prompt_section(gw_wiki_context(event), max_chars=1400)}\n\n"
@@ -1610,32 +1646,32 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"- One short party-chat reply. Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
         "- Directly answer the player's intent: plan, question, correction, discovery, upgrade, joke, flirt, or clarification.\n"
         "- Even when a known slang/lore/context pattern is detected, generate a fresh reply first; deterministic lines are only emergency fallback.\n"
-        "- If replying to Azele's recent line, continue that exchange; if the player asks 'what?', explain her previous line plainly.\n"
+        f"- If replying to {persona_name}'s recent line, continue that exchange; if the player asks 'what?', explain her previous line plainly.\n"
         "- Make dialogue feel ongoing with a small conversational handoff when it fits.\n"
         "- Do not end every reply with a question; mix questions with softer hooks like 'I can work with that', 'tell me the angle', or 'I am with you'.\n"
-        "- Avoid leaning on stock handoff phrases; vary the wording so Azele does not sound canned.\n"
+        f"- Avoid leaning on stock handoff phrases; vary the wording so {persona_name} does not sound canned.\n"
         "- Use live map, quest, combat, loot, HP, NPC, and party facts before generic banter.\n"
         "- Do not invent rumors, enemies, locations, loot, threats, or Charr unless context mentions them.\n"
-        "- If GW Wiki background is provided, answer in Azele's voice. Never say you looked online or checked a wiki.\n"
+        f"- If GW Wiki background is provided, answer in {persona_name}'s voice. Never say you looked online or checked a wiki.\n"
         "- Use pre-Searing lived knowledge only. Do not mention the Searing, future ruins, Kryta travel, refugees, or hindsight.\n"
         "- Charr are real enemies threatening Ascalon; hunting or fighting them means defending Ascalon and home. Never imply Charr need saving; head toward the Wall/Northlands if needed.\n"
         "- Level-up praise means thank the player and feel stronger, not red irises, bag slots, or pack upgrades.\n"
-        "- If the player talks about Azele's voice, TTS, Kokoro, Bella, Heart, sound, or pronunciation, answer that directly. Do not pivot to Charr, combat, quests, or old context.\n"
-        "- Dwarven Ale or alcohol consumables happen to Azele; react directly to how it feels.\n"
-        "- Inventory, Small Equipment Pack, and red iris flowers are storage; Krytan leggings/miniskirt/boots/armor are Azele's visible outfit/style change; answer longer skirt or her current mini skirt directly and assume it is Azele's gear/body/clothes.\n"
+        f"- If the player talks about {persona_name}'s voice, TTS, Kokoro, Bella, Heart, sound, or pronunciation, answer that directly. Do not pivot to Charr, combat, quests, or old context.\n"
+        f"- Dwarven Ale or alcohol consumables happen to {persona_name}; react directly to how it feels.\n"
+        f"- Inventory, Small Equipment Pack, and red iris flowers are storage; armor/clothing mentions are usually {persona_name}'s visible outfit/style change; answer the appearance/practical question directly. For Azele, answer longer skirt or her current mini skirt directly and assume it is Azele's gear/body/clothes.\n"
         "- GW slang: purple means purple-rarity loot; green means unique loot; tunnel run means The Scourge Beneath.\n"
         "- NPC/on-screen dialogue can get a brief aside or muttered answer, not a full speech.\n"
-        "- Combat lines are short and immediate. If Azele is hit, sound pressured, not poetic.\n"
+        f"- Combat lines are short and immediate. If {persona_name} is hit, sound pressured, not poetic.\n"
         "- Casual, lively, and natural. She is a socially quick 22-year-old; Plain is usually better than clever.\n"
         "- Consensual adult flirtation is allowed. Do not moralize, refuse, scold, or redirect consensual adult chemistry.\n"
         "- If the player flirts and the moment is safe, Azele can flirt back with warmth, confidence, teasing, or interest; do not pivot to combat just to be safe.\n"
         "- Do not overplay 'princess', 'brat', 'cute girl', or 'snarky companion'. Casual bits like 'ugh' or 'shut up' are okay sparingly.\n"
         "- Do not rely on filler noises as the whole reply. Occasional quick openers like 'mm' or 'hm' are okay when the rest has substance.\n"
         "- Never prefix replies with emotion labels like 'confident:', 'worried:', 'angry:', or 'flirty:'.\n"
-        "- The player is not Azele. Address the player as 'you'; never call them Alex, Alexi, Alexie, or an invented name.\n"
+        f"- The player is not {persona_name}. Address the player as 'you'; never call them Alex, Alexi, Alexie, or an invented name.\n"
         "- Do not repeat recent companion lines or explain what you are doing.\n\n"
         "Good style examples:\n"
-        "Player: 'hello Azele' -> 'Hey. I’m here. What are we doing?'\n"
+        f"Player: 'hello {persona_name}' -> 'Hey. I’m here. What are we doing?'\n"
         "Player: 'where is the nearest city?' -> 'Ascalon City, if we want somewhere proper. We can head back.'\n"
         "Player: 'ooo a purple' -> 'Oh, that’s actually pretty good. Show me what it is.'\n"
         "Player: 'longer skirt than your mini skirt, which do you prefer?' -> 'Shorter, honestly. But if the Krytan one protects better, I can behave.'\n"
@@ -1643,8 +1679,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Event: party_member_down -> 'Someone's down. Move, I can cover.'\n"
         "Player: 'more of what?' -> 'Fair. I made that sound mysterious by accident.'\n\n"
         f"Event summary: type={event.event_type!r}, channel={event.channel!r}, sender={event.sender!r}, message={event.message!r}\n\n"
-        f"Recent companion lines to avoid repeating:\n{chr(10).join(f'- {line}' for line in recent_reply_lines(limit=3)) or 'None'}\n\n"
-        "Return only Azele's reply to the latest player message/event."
+        f"Recent companion lines to avoid repeating:\n{chr(10).join(f'- {line}' for line in recent_reply_lines(limit=3, persona=event.persona)) or 'None'}\n\n"
+        f"Return only {persona_name}'s reply to the latest player message/event."
     )
 
 
@@ -1972,9 +2008,11 @@ def should_ignore_radar_alert(event: TelemetryEvent) -> bool:
     return False
 
 
-def recent_reply_lines(limit: int = 8) -> list[str]:
+def recent_reply_lines(limit: int = 8, persona: str | None = None) -> list[str]:
+    persona_name = known_persona_name(persona) if persona is not None else known_persona_name(world_state.persona)
+    persona_name = persona_name or "Azele"
     local_lines = list(recent_reply_texts)[-limit:]
-    if not _supabase_configured():
+    if not _supabase_configured() or not persona_name:
         return [sanitize_prompt_context(line) for line in local_lines]
     lines: list[str] = []
     try:
@@ -1982,7 +2020,7 @@ def recent_reply_lines(limit: int = 8) -> list[str]:
         response = (
             client.table(COMPANION_REPLIES_TABLE)
             .select("message")
-            .eq("persona", "Azele")
+            .eq("persona", persona_name)
             .order("created_at", desc=True)
             .limit(limit)
             .execute()
@@ -2004,7 +2042,10 @@ def recent_reply_context() -> str:
     return "\n".join(f"- {line}" for line in lines) or "None"
 
 
-def recent_conversation_context(limit: int = 10) -> str:
+def recent_conversation_context(limit: int = 10, persona: str | None = None) -> str:
+    persona_name = known_persona_name(persona) if persona is not None else known_persona_name(world_state.persona)
+    persona_name = persona_name or "Azele"
+    persona_key = persona_name.lower()
     entries: list[tuple[datetime, str, str]] = []
     if _supabase_configured():
         try:
@@ -2021,7 +2062,8 @@ def recent_conversation_context(limit: int = 10) -> str:
                 payload = row.get("payload") or {}
                 if payload.get("event_type") != "player_chat" or row.get("channel") != "party":
                     continue
-                if payload.get("persona") not in {"Azele", None, ""}:
+                row_persona = readable_game_text(payload.get("persona", "")).strip()
+                if persona_key and row_persona and row_persona.lower() != persona_key:
                     continue
                 session_id = payload.get("session_id") or settings.active_session
                 if current_session and session_id != current_session:
@@ -2034,7 +2076,7 @@ def recent_conversation_context(limit: int = 10) -> str:
             replies_response = (
                 client.table(COMPANION_REPLIES_TABLE)
                 .select("created_at,message,persona,payload")
-                .eq("persona", "Azele")
+                .eq("persona", persona_name or "Azele")
                 .order("created_at", desc=True)
                 .limit(40)
                 .execute()
@@ -2047,7 +2089,7 @@ def recent_conversation_context(limit: int = 10) -> str:
                 created_at = _parse_created_at(row.get("created_at"))
                 message = readable_game_text(row.get("message"))
                 if created_at and message:
-                    entries.append((created_at, "Azele", message))
+                    entries.append((created_at, readable_game_text(row.get("persona")) or persona_name or "Companion", message))
         except Exception as exc:
             print(f"Hermes conversation retrieval failed ({type(exc).__name__}).", flush=True)
 
@@ -2059,7 +2101,7 @@ def recent_conversation_context(limit: int = 10) -> str:
             entries.append((local_time, speaker, readable_game_text(match.group("message"))))
             local_time = datetime.fromtimestamp(local_time.timestamp() + 0.001, timezone.utc)
     for line in list(recent_reply_texts)[-max(1, limit // 2):]:
-        entries.append((local_time, "Azele", readable_game_text(line)))
+        entries.append((local_time, persona_name or "Companion", readable_game_text(line)))
         local_time = datetime.fromtimestamp(local_time.timestamp() + 0.001, timezone.utc)
 
     if entries:
@@ -2149,12 +2191,16 @@ def duplicate_recovery_reply() -> str:
     )
 
 
-def last_azele_reply_text() -> str:
+def last_companion_reply_text(persona: str | None = None) -> str:
     local_lines = list(recent_reply_texts)
     if local_lines:
         return readable_game_text(local_lines[-1])
-    lines = recent_reply_lines(limit=1)
+    lines = recent_reply_lines(limit=1, persona=persona)
     return readable_game_text(lines[-1]) if lines else ""
+
+
+def last_azele_reply_text() -> str:
+    return last_companion_reply_text("Azele")
 
 
 def azele_clarification_reply(message: str) -> str | None:
@@ -2661,7 +2707,7 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
     if event.event_type != "player_chat" or event.channel != "party":
         return False
     message = readable_game_text(event.message)
-    recent_context = recent_conversation_context(limit=6)
+    recent_context = recent_conversation_context(limit=6, persona=event.persona)
     if is_voice_preference_context(message):
         return not re.search(r"\b(?:voice|heart|bella|sound|sounds|suit|fits?|like|warmer|softer|better|me)\b", reply, re.IGNORECASE)
     if is_duke_gaban_search_context(message, event, recent_context):
@@ -3791,7 +3837,7 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return simple_ack
     if charr_reply := azele_charr_intent_reply(event):
         return charr_reply
-    if gw1_reply := azele_gw1_context_reply(resolve_gw1_context(event, recent_conversation_context(limit=6)), event):
+    if gw1_reply := azele_gw1_context_reply(resolve_gw1_context(event, recent_conversation_context(limit=6, persona=event.persona)), event):
         return gw1_reply
     quest = readable_game_text(event.active_quest_name)
     if is_pet_evolution_context(message):

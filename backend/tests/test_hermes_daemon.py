@@ -569,6 +569,38 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("nearest city?' -> 'Ascalon City", prompt)
         self.assertNotIn("nearest city?' -> 'Ashford", prompt)
 
+    def test_meliora_prompt_uses_active_persona_routing(self) -> None:
+        recent_reply_texts.append("Trail's quiet, but quiet can lie.")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "hey Meliora, should we cut through Regent Valley?",
+                "metadata": {"event_type": "player_chat", "persona": "Meliora Andru"},
+            }
+        )
+
+        prompt = build_character_reply_prompt(event)
+
+        self.assertIn("Meliora Andru", prompt)
+        self.assertIn("22-year-old Ascalonian Ranger", prompt)
+        self.assertIn("Recent Meliora Andru replies", prompt)
+        self.assertIn("[Meliora Andru]: Trail's quiet, but quiet can lie.", prompt)
+        self.assertIn("Most recent Meliora Andru line", prompt)
+        self.assertIn("Return only Meliora Andru's reply", prompt)
+        self.assertNotIn("Return only Azele's reply", prompt)
+
+    def test_generic_persona_profile_loads_local_persona_notes(self) -> None:
+        path = hermes_daemon.PERSONA_MEMORY_DIR / "routing-persona.md"
+        path.write_text("# Routing Persona\n\n- Ranger from Regent Valley.\n", encoding="utf-8")
+        try:
+            profile = hermes_daemon.persona_profile("Routing Persona")
+        finally:
+            path.unlink(missing_ok=True)
+
+        self.assertIn("Routing Persona is the active Guild Wars 1 companion persona", profile)
+        self.assertIn("Ranger from Regent Valley", profile)
+
     def test_player_chat_prompt_includes_recent_azele_reply_for_continuity(self) -> None:
         recent_reply_texts.append("City air helps. What do you usually do first when you get back here?")
         event = event_from_game_log(
@@ -3118,6 +3150,22 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(reply.urgency, "LOW")
         self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
         self.assertIsNone(second)
+
+    def test_ambient_heartbeat_uses_active_non_azele_persona(self) -> None:
+        now = time.time()
+        world_state.persona = "Meliora Andru"
+        world_state.session_id = "ambient-heartbeat-meliora"
+        world_state.map_id = 149
+        world_state.map_name = "Regent Valley"
+        world_state.last_interaction_timestamp = now - (AMBIENT_HEARTBEAT_ACTIVITY_SECONDS / 2)
+        world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
+
+        reply = ambient_heartbeat_reply(now=now)
+
+        self.assertIsNotNone(reply)
+        assert reply is not None
+        self.assertEqual(reply.persona, "Meliora Andru")
+        self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
 
     def test_ambient_heartbeat_waits_after_player_chat(self) -> None:
         now = time.time()
