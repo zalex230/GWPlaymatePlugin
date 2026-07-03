@@ -47,6 +47,7 @@ world_state = LiveWorldState(
 )
 recent_reply_texts: deque[str] = deque(maxlen=12)
 map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
+ambient_quip_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
 MAX_GW_REPLY_LINES = 5
 MULTI_MESSAGE_MIN_REPLY_DELAY_MS = 3200
@@ -170,7 +171,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
 )
 FILLER_OPENER_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]+", re.IGNORECASE)
 DANGLING_REPLY_ENDING_PATTERN = re.compile(
-    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)$",
+    r"(?:\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\b(?:so|because|then|and|but)\s+(?:we|i|you|they|he|she|it))$",
     re.IGNORECASE,
 )
 DANGLING_SPLIT_ENDING_PATTERN = re.compile(
@@ -1123,6 +1124,18 @@ def compact_persona_profile(persona: str) -> str:
     return persona_profile(persona)
 
 
+def is_flirt_or_intimate_player_chat(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    return bool(
+        re.search(
+            r"\b(?:flirt|kiss|cute|pretty|beautiful|hot|sexy|want\s+you|with\s+you|just\s+us|just\s+the\s+two\s+of\s+us|"
+            r"get\s+to\s+know\s+each\s+other|place\s+quiet|somewhere\s+quiet|handle\s+you|all\s+night|ale\s+in\s+hand|"
+            r"if\s+you\s+know\s+what\s+i\s+mean|you\s+know\s+what\s+i\s+mean)\b",
+            lowered,
+        )
+    )
+
+
 def map_display_name(event: TelemetryEvent) -> str:
     return readable_game_text(getattr(event, "map_name", "")) or KNOWN_PRESEARING_MAP_NAMES.get(event.map_id, "")
 
@@ -1365,14 +1378,30 @@ def ambient_quip(event: TelemetryEvent) -> str:
     map_name = map_display_name(event).lower()
     for name, variants in AMBIENT_QUIP_VARIANTS.items():
         if name in map_name:
-            return first_fresh_reply(variants)
-    return first_fresh_reply(
+            return rotating_ambient_quip(event, variants)
+    return rotating_ambient_quip(
+        event,
         [
             "Still with you. What are you watching for?",
             "Quiet moment. Suspicious, but I’ll take it. What now?",
             "I’m here. Thinking, unfortunately. Want to interrupt me?",
-        ]
+        ],
     )
+
+
+def rotating_ambient_quip(event: TelemetryEvent, variants: list[str]) -> str:
+    if not variants:
+        return "Still with you. What are you watching for?"
+    key = (event.persona.strip().lower() or "unknown", event.session_id or settings.active_session, event.map_id)
+    start = ambient_quip_variant_by_session.get(key, 0) % len(variants)
+    ordered = variants[start:] + variants[:start]
+    choice = first_fresh_reply(ordered)
+    selected_index = variants.index(choice) if choice in variants else start
+    if is_too_similar_to_recent_replies(choice):
+        choice = ordered[0]
+        selected_index = variants.index(choice)
+    ambient_quip_variant_by_session[key] = selected_index + 1
+    return choice
 
 
 def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = False) -> CompanionReplyInsert | None:
@@ -1463,12 +1492,20 @@ def recent_companion_context(limit: int = 4) -> str:
 def build_character_reply_prompt(event: TelemetryEvent) -> str:
     if event.event_type == "player_chat" and event.channel == "party":
         last_azele_line = last_azele_reply_text()
+        social_hint = ""
+        if is_flirt_or_intimate_player_chat(event.message):
+            social_hint = (
+                "This is flirtatious/social player intent. If the live facts do not show immediate danger, "
+                "stay with the chemistry instead of redirecting to Charr, combat, errands, or generic planning. "
+                "Azele may flirt back, tease, be amused, set playful terms, or show interest in her own voice.\n"
+            )
         task = "Reply directly to the player's latest party chat."
         context_block = (
             f"PLAYER JUST SAID: {event.message!r}\n"
             "Answer that intent first; personality comes after comprehension.\n"
             f"Most recent Azele line, if the player is responding to it: {last_azele_line or 'None'}\n"
             "If this is a follow-up, continue that thread.\n"
+            f"{social_hint}"
         )
     elif event.event_type == "target_changed":
         task = "React briefly to the player's called/selected target."
@@ -1584,6 +1621,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Combat lines are short and immediate. If Azele is hit, sound pressured, not poetic.\n"
         "- Casual, lively, and natural. She is a socially quick 22-year-old; Plain is usually better than clever.\n"
         "- Consensual adult flirtation is allowed. Do not moralize, refuse, scold, or redirect consensual adult chemistry.\n"
+        "- If the player flirts and the moment is safe, Azele can flirt back with warmth, confidence, teasing, or interest; do not pivot to combat just to be safe.\n"
         "- Do not overplay 'princess', 'brat', 'cute girl', or 'snarky companion'. Casual bits like 'ugh' or 'shut up' are okay sparingly.\n"
         "- Do not start replies with filler noises like 'mm', 'mhm', 'mhmm', or 'hm'. Avoid stiff phrases like 'peace-talkers'.\n"
         "- Never prefix replies with emotion labels like 'confident:', 'worried:', 'angry:', or 'flirty:'.\n"
@@ -1625,9 +1663,10 @@ def build_player_intent_retry_prompt(event: TelemetryEvent, rejected_reply: str,
         "Retry instruction:\n"
         f"- The previous draft was rejected because it {reason}.\n"
         f"- Rejected draft: {rejected_reply!r}\n"
-        "- Replace it with one direct reply to the player's actual latest message.\n"
+        "- Replace it with one complete, natural reply to the player's actual latest message or current event.\n"
         "- Anchor on the nouns, pronouns, question, joke, correction, or plan in the latest player message and recent transcript.\n"
-        "- Do not answer a different topic. Do not use a generic check-in.\n"
+        "- Finish the thought cleanly. Do not stop on dangling words like 'so we', 'because', 'and', or 'then'.\n"
+        "- Do not answer a different topic. Do not use a generic check-in. Do not repeat the rejected draft.\n"
         "Return only Azele's corrected reply."
     )
 
@@ -3262,7 +3301,12 @@ def azele_combat_over_reply(event: TelemetryEvent) -> str:
     )
 
 
-def ollama_generate_visible(prompt: str, *, timeout_seconds: float | None = None) -> str:
+def ollama_generate_visible(
+    prompt: str,
+    *,
+    timeout_seconds: float | None = None,
+    num_predict: int | None = None,
+) -> str:
     url = settings.ollama_host.rstrip("/") + "/api/generate"
     payload = {
         "model": settings.ollama_model,
@@ -3276,7 +3320,7 @@ def ollama_generate_visible(prompt: str, *, timeout_seconds: float | None = None
             "repeat_penalty": 1.18,
             "repeat_last_n": 128,
             "num_ctx": min(settings.ollama_num_ctx, 4096),
-            "num_predict": settings.ollama_num_predict,
+            "num_predict": settings.ollama_num_predict if num_predict is None or num_predict <= 0 else num_predict,
         },
     }
     request = urllib.request.Request(
@@ -3386,15 +3430,16 @@ def character_reply_with_ollama(
     event: TelemetryEvent,
     *,
     timeout_seconds: float | None = None,
+    num_predict: int | None = None,
     record_id: int | None = None,
 ) -> HermesDecision:
     started_at = time.perf_counter()
     base_prompt = build_character_reply_prompt(event)
-    response = ollama_generate_visible(base_prompt, timeout_seconds=timeout_seconds)
+    response = ollama_generate_visible(base_prompt, timeout_seconds=timeout_seconds, num_predict=num_predict)
     elapsed = time.perf_counter() - started_at
     print(
         f"Ollama character reply generated in {elapsed:.2f}s "
-        f"(model={settings.ollama_model}, ctx={settings.ollama_num_ctx}, predict={settings.ollama_num_predict}).",
+        f"(model={settings.ollama_model}, ctx={settings.ollama_num_ctx}, predict={num_predict or settings.ollama_num_predict}).",
         flush=True,
     )
     cleaned = clean_model_reply(response)
@@ -3407,10 +3452,10 @@ def character_reply_with_ollama(
             f"({type(exc).__name__}: {exc}): {preview!r}",
             flush=True,
         )
-        if str(exc) == "missed clear player intent":
+        if str(exc) in {"missed clear player intent", "bad shape model reply", "repeated recent reply"}:
             retry_started_at = time.perf_counter()
             retry_prompt = build_player_intent_retry_prompt(event, cleaned, str(exc))
-            retry_response = ollama_generate_visible(retry_prompt, timeout_seconds=timeout_seconds)
+            retry_response = ollama_generate_visible(retry_prompt, timeout_seconds=timeout_seconds, num_predict=num_predict)
             retry_elapsed = time.perf_counter() - retry_started_at
             retry_cleaned = clean_model_reply(retry_response)
             retry_reply = validate_model_reply(retry_cleaned, event)
@@ -3440,6 +3485,7 @@ def decide_with_ollama(event: TelemetryEvent, *, record_id: int | None = None) -
             return character_reply_with_ollama(
                 event,
                 timeout_seconds=settings.hermes_player_chat_ollama_timeout_seconds,
+                num_predict=settings.hermes_player_chat_ollama_num_predict,
                 record_id=record_id,
             )
         return character_reply_with_ollama(event, record_id=record_id)

@@ -67,6 +67,7 @@ class HermesDaemonTests(unittest.TestCase):
         gw_wiki_cache.clear()
         last_map_comment_by_session.clear()
         map_comment_variant_by_session.clear()
+        hermes_daemon.ambient_quip_variant_by_session.clear()
         memory_buffers.clear()
         memory_last_write_at.clear()
         world_state.last_spoken_at = 0
@@ -421,6 +422,35 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertGreater(len(lines), 1)
         self.assertFalse(lines[0].endswith(" on"))
         self.assertTrue(all(len(line) <= hermes_daemon.MAX_GW_CHAT_CHARS for line in lines))
+
+    def test_ambient_quip_rotates_when_recent_replies_are_repeated(self) -> None:
+        original_recent = hermes_daemon.recent_reply_lines
+        repeated = "If we stay too long, I’m going to start fussing with my hair, and then you have to pretend not to notice."
+        try:
+            hermes_daemon.recent_reply_lines = lambda limit=8: [repeated]
+            event = event_from_game_log(
+                {
+                    "sender": "System",
+                    "channel": "system",
+                    "message": "snapshot",
+                    "metadata": {
+                        "event_type": "snapshot",
+                        "persona": "Azele",
+                        "map_id": 148,
+                        "map_name": "Ascalon City",
+                        "session_id": "ambient-rotate",
+                    },
+                }
+            )
+
+            first = hermes_daemon.ambient_quip(event)
+            second = hermes_daemon.ambient_quip(event)
+        finally:
+            hermes_daemon.recent_reply_lines = original_recent
+
+        self.assertNotEqual(first, repeated)
+        self.assertNotEqual(second, repeated)
+        self.assertNotEqual(first, second)
 
     def test_multi_line_replies_include_delay_metadata(self) -> None:
         decision = hermes_daemon.HermesDecision(
@@ -1420,7 +1450,7 @@ class HermesDaemonTests(unittest.TestCase):
         original_generate = hermes_daemon.ollama_generate_visible
         try:
             hermes_daemon.ollama_generate_visible = (
-                lambda prompt, timeout_seconds=None: prompts.append(prompt)
+                lambda prompt, timeout_seconds=None, num_predict=None: prompts.append(prompt)
                 or "Yes. They threaten Ascalon, so we prepare and hit them properly."
             )
             replies = process_event(
@@ -1541,7 +1571,12 @@ class HermesDaemonTests(unittest.TestCase):
         )
         original_generate = hermes_daemon.ollama_generate_visible
         try:
-            def fake_generate(prompt: str, *, timeout_seconds: float | None = None) -> str:
+            def fake_generate(
+                prompt: str,
+                *,
+                timeout_seconds: float | None = None,
+                num_predict: int | None = None,
+            ) -> str:
                 prompts.append(prompt)
                 return next(responses)
 
@@ -1555,6 +1590,67 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("Retry instruction", prompts[1])
         self.assertIn("missed clear player intent", prompts[1])
         self.assertIn("Lakeside again", prompts[1])
+
+    def test_character_reply_retries_when_model_reply_is_truncated(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "i think i can handle you all night long",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Azele",
+                    "map_name": "Ascalon City",
+                },
+            }
+        )
+        prompts: list[str] = []
+        responses = iter(
+            [
+                "Fair enough, but don't get cocky yet. I've got a lot more power than most folks realize. Let us go find those Charr instead. Tell me where their lair is so we",
+                "Careful. If you say that all night, I might make you prove it slowly.",
+            ]
+        )
+        original_generate = hermes_daemon.ollama_generate_visible
+        try:
+            def fake_generate(
+                prompt: str,
+                *,
+                timeout_seconds: float | None = None,
+                num_predict: int | None = None,
+            ) -> str:
+                prompts.append(prompt)
+                return next(responses)
+
+            hermes_daemon.ollama_generate_visible = fake_generate
+            decision = hermes_daemon.character_reply_with_ollama(event, timeout_seconds=1.0, num_predict=96, record_id=124)
+        finally:
+            hermes_daemon.ollama_generate_visible = original_generate
+
+        self.assertEqual(decision.response, "Careful. If you say that all night, I might make you prove it slowly.")
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("bad shape model reply", prompts[1])
+        self.assertIn("Finish the thought cleanly", prompts[1])
+
+    def test_flirty_player_chat_prompt_prioritizes_social_intent(self) -> None:
+        prompt = build_character_reply_prompt(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "i think i can handle you all night long",
+                    "metadata": {
+                        "event_type": "player_chat",
+                        "persona": "Azele",
+                        "map_name": "Ascalon City",
+                    },
+                }
+            )
+        )
+
+        self.assertIn("flirtatious/social player intent", prompt)
+        self.assertIn("stay with the chemistry", prompt)
+        self.assertIn("Azele can flirt back", prompt)
 
     def test_model_reply_accepts_duke_gaban_search_answer(self) -> None:
         world_state.recent_chat_history.append("[Player]: where is Duke Gaban?")
@@ -1681,7 +1777,7 @@ class HermesDaemonTests(unittest.TestCase):
         original_generate = hermes_daemon.ollama_generate_visible
         try:
             hermes_daemon.ollama_generate_visible = (
-                lambda prompt, timeout_seconds=None: prompts.append(prompt)
+                lambda prompt, timeout_seconds=None, num_predict=None: prompts.append(prompt)
                 or "We would not. Not while they are threatening Ascalon."
             )
             replies = process_event(
@@ -1987,6 +2083,11 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(
             model_reply_has_bad_shape(
                 "Yeah, let's go grab some gear and hit them hard at Piken Square first thing tomorrow morning while we're still fresh on Ascalon soil. Your call where exactly though; north of the"
+            )
+        )
+        self.assertTrue(
+            model_reply_has_bad_shape(
+                "Fair enough, but don't get cocky yet. I've got a lot more power than most folks realize. Let us go find those Charr instead. Tell me where their lair is so we"
             )
         )
         self.assertFalse(model_reply_has_bad_shape("I know. Still nice to hear."))
@@ -2313,15 +2414,23 @@ class HermesDaemonTests(unittest.TestCase):
         original_settings = hermes_daemon.settings
         original_generate = hermes_daemon.ollama_generate_visible
         observed: list[float | None] = []
+        observed_predict: list[int | None] = []
 
-        def fake_generate(prompt: str, *, timeout_seconds: float | None = None) -> str:
+        def fake_generate(
+            prompt: str,
+            *,
+            timeout_seconds: float | None = None,
+            num_predict: int | None = None,
+        ) -> str:
             observed.append(timeout_seconds)
+            observed_predict.append(num_predict)
             return "I know. Still nice to hear."
 
         try:
             hermes_daemon.settings = replace(
                 original_settings,
                 hermes_player_chat_ollama_timeout_seconds=8.0,
+                hermes_player_chat_ollama_num_predict=96,
             )
             hermes_daemon.ollama_generate_visible = fake_generate
 
@@ -2341,6 +2450,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(decision.response, "I know. Still nice to hear.")
         self.assertEqual(observed, [8.0])
+        self.assertEqual(observed_predict, [96])
 
     def test_player_chat_ollama_timeout_falls_back_quickly(self) -> None:
         original = hermes_daemon.decide_with_ollama

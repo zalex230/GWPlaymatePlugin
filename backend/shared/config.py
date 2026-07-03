@@ -60,6 +60,7 @@ class BackendSettings:
     ollama_num_predict: int = _int_env("OLLAMA_NUM_PREDICT", 40)
     ollama_timeout_seconds: float = _float_env("OLLAMA_TIMEOUT_SECONDS", 120.0)
     hermes_player_chat_ollama_timeout_seconds: float = _float_env("HERMES_PLAYER_CHAT_OLLAMA_TIMEOUT_SECONDS", 15.0)
+    hermes_player_chat_ollama_num_predict: int = _int_env("HERMES_PLAYER_CHAT_OLLAMA_NUM_PREDICT", 96)
     hermes_use_ollama: bool = _bool_env("HERMES_USE_OLLAMA", False)
     hermes_min_speak_seconds: float = _float_env("HERMES_MIN_SPEAK_SECONDS", 20.0)
     recent_chat_limit: int = _int_env("HERMES_RECENT_CHAT_LIMIT", 10)

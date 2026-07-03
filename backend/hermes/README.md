@@ -38,6 +38,7 @@ Useful environment variables live in `backend/.env`:
 - `OLLAMA_MODEL` (default: `hermes-qwen35-4b:latest`; keep Hermes on the fast quantized Qwen model)
 - `OLLAMA_NUM_CTX`
 - `OLLAMA_NUM_PREDICT`
+- `HERMES_PLAYER_CHAT_OLLAMA_NUM_PREDICT` (default: `96`; lets direct conversation finish multi-message replies without affecting terse ambient/combat generations)
 - `HERMES_TTS_PROVIDER`
 - `KOKORO_TTS_URL`
 - `KOKORO_TTS_VOICE`
