@@ -658,6 +658,8 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("[Meliora Andru]: Trail's quiet, but quiet can lie.", prompt)
         self.assertIn("Most recent Meliora Andru line", prompt)
         self.assertIn("Return only Meliora Andru's reply", prompt)
+        self.assertIn("Plain modern party-chat voice, not old-English or theatrical", prompt)
+        self.assertIn("No old-English, bardic, courtly, theatrical", prompt)
         self.assertNotIn("Return only Azele's reply", prompt)
 
     def test_generic_persona_profile_loads_local_persona_notes(self) -> None:
@@ -2345,6 +2347,21 @@ class HermesDaemonTests(unittest.TestCase):
             "Ready to settle down and wait it out until you need us more than me waiting around?",
             LOW_QUALITY_REPLY_PATTERNS,
         )
+
+    def test_rejects_old_english_theatre_voice(self) -> None:
+        self.assertRegex("Aye, we shall take the road lest the Charr find us.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("Keep thy bow ready upon this road.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("By my honour, mine arrow shall answer.", LOW_QUALITY_REPLY_PATTERNS)
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "ready?",
+                "metadata": {"event_type": "player_chat", "persona": "Meliora Andru"},
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "low quality"):
+            validate_model_reply("Aye, we shall take the road lest the Charr find us.", event)
 
     def test_azele_allows_natural_filler_openers_with_substance(self) -> None:
         self.assertRegex("Mm.", FILLER_ONLY_REPLY_PATTERN)
