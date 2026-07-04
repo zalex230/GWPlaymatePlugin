@@ -1673,7 +1673,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"- If the player talks about {persona_name}'s voice, TTS, Kokoro, Bella, Heart, sound, or pronunciation, answer that directly. Do not pivot to Charr, combat, quests, or old context.\n"
         f"- Dwarven Ale or alcohol consumables happen to {persona_name}; react directly to how it feels.\n"
         f"- Inventory, Small Equipment Pack, and red iris flowers are storage; armor/clothing mentions are usually {persona_name}'s visible outfit/style change; answer the appearance/practical question directly. For Azele, answer longer skirt or her current mini skirt directly and assume it is Azele's gear/body/clothes.\n"
-        "- GW slang: purple means purple-rarity loot; green means unique loot; tunnel run means The Scourge Beneath.\n"
+        "- Gamer/GW slang: gg means good game/nice fight; ggwp/wp means well played; ty/thx means thanks; yw/np means no problem; res/rez means resurrect; brb/afk/bio are short breaks; omw means on my way; pull/aggro/kite/aoe/dps/heal/prot/wipe/drop have normal MMO meanings; purple/purp means purple-rarity loot; green means unique loot; tunnel run means The Scourge Beneath.\n"
         "- NPC/on-screen dialogue can get a brief aside or muttered answer, not a full speech.\n"
         f"- Combat lines are short and immediate. If {persona_name} is hit, sound pressured, not poetic.\n"
         "- Casual, lively, and natural. She is a socially quick 22-year-old; Plain is usually better than clever.\n"
