@@ -53,10 +53,12 @@ MAX_GW_REPLY_LINES = 8
 MULTI_MESSAGE_MIN_REPLY_DELAY_MS = 3200
 MULTI_MESSAGE_MAX_REPLY_DELAY_MS = 14000
 VISIBLE_ENEMY_RANGE = 900.0
-AMBIENT_QUIP_MIN_SECONDS = 55.0
-AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 55.0
+AMBIENT_QUIP_MIN_SECONDS = 40.0
+AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS = 35.0
 AMBIENT_HEARTBEAT_POLL_SECONDS = 10.0
-AMBIENT_HEARTBEAT_ACTIVITY_SECONDS = 600.0
+AMBIENT_HEARTBEAT_ACTIVITY_SECONDS = 1800.0
+AMBIENT_OLLAMA_TIMEOUT_SECONDS = 8.0
+AMBIENT_OLLAMA_NUM_PREDICT = 40
 UNCONSUMED_REPLY_STALE_SECONDS = 60.0
 MAP_ENTRY_AFTER_PLAYER_CHAT_QUIET_SECONDS = 35.0
 PERSONA_MEMORY_DIR = Path(__file__).with_name("personas")
@@ -1493,7 +1495,11 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
         return None
     if use_ollama and should_use_ollama_for_event(event):
         try:
-            decision = character_reply_with_ollama(event)
+            decision = character_reply_with_ollama(
+                event,
+                timeout_seconds=AMBIENT_OLLAMA_TIMEOUT_SECONDS,
+                num_predict=AMBIENT_OLLAMA_NUM_PREDICT,
+            )
             decision.urgency = "LOW"
         except Exception as exc:
             print(f"Ollama ambient heartbeat failed; using fallback quip ({type(exc).__name__}).", flush=True)

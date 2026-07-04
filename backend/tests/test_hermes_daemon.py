@@ -3433,7 +3433,7 @@ class HermesDaemonTests(unittest.TestCase):
         world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
 
         original = hermes_daemon.character_reply_with_ollama
-        hermes_daemon.character_reply_with_ollama = lambda event: hermes_daemon.HermesDecision(
+        hermes_daemon.character_reply_with_ollama = lambda event, **kwargs: hermes_daemon.HermesDecision(
             should_speak=True,
             channel_override="CHANNEL_PARTY",
             urgency="LOW",
@@ -3449,6 +3449,37 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(reply.message, "City is calm for once. Want to use the quiet or move?")
         self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
 
+    def test_ambient_heartbeat_uses_short_ollama_timeout(self) -> None:
+        now = time.time()
+        world_state.persona = "Azele"
+        world_state.session_id = "ambient-heartbeat-llm-timeout"
+        world_state.map_id = 148
+        world_state.map_name = "Ascalon City"
+        world_state.last_interaction_timestamp = now - (AMBIENT_HEARTBEAT_ACTIVITY_SECONDS / 2)
+        world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
+
+        captured: dict[str, object] = {}
+        original = hermes_daemon.character_reply_with_ollama
+
+        def capture_options(event: object, **kwargs: object) -> hermes_daemon.HermesDecision:
+            captured.update(kwargs)
+            return hermes_daemon.HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="LOW",
+                response="City is calm for once. Want to use the quiet or move?",
+            )
+
+        hermes_daemon.character_reply_with_ollama = capture_options
+        try:
+            reply = ambient_heartbeat_reply(now=now, use_ollama=True)
+        finally:
+            hermes_daemon.character_reply_with_ollama = original
+
+        self.assertIsNotNone(reply)
+        self.assertEqual(captured["timeout_seconds"], hermes_daemon.AMBIENT_OLLAMA_TIMEOUT_SECONDS)
+        self.assertEqual(captured["num_predict"], hermes_daemon.AMBIENT_OLLAMA_NUM_PREDICT)
+
     def test_ambient_heartbeat_hides_internal_trigger_from_model_prompt(self) -> None:
         now = time.time()
         world_state.persona = "Azele"
@@ -3461,7 +3492,7 @@ class HermesDaemonTests(unittest.TestCase):
         captured: dict[str, object] = {}
         original = hermes_daemon.character_reply_with_ollama
 
-        def capture_event(event: object) -> hermes_daemon.HermesDecision:
+        def capture_event(event: object, **kwargs: object) -> hermes_daemon.HermesDecision:
             captured["event"] = event
             return hermes_daemon.HermesDecision(
                 should_speak=True,
@@ -3511,7 +3542,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         original = hermes_daemon.character_reply_with_ollama
 
-        def fail_ollama(event: object) -> hermes_daemon.HermesDecision:
+        def fail_ollama(event: object, **kwargs: object) -> hermes_daemon.HermesDecision:
             raise RuntimeError("offline")
 
         hermes_daemon.character_reply_with_ollama = fail_ollama
