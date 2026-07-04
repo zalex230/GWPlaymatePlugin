@@ -13,7 +13,7 @@ import unittest
 os.environ["GWPLAYMATE_DISABLE_MEMORY_WRITES"] = "1"
 
 import backend.hermes.daemon as hermes_daemon
-from backend.shared.models import CompanionReplyInsert
+from backend.shared.models import CompanionReplyInsert, TelemetryEvent
 from backend.hermes_daemon.daemon import (
     FILLER_ONLY_REPLY_PATTERN,
     LOW_QUALITY_REPLY_PATTERNS,
@@ -65,6 +65,8 @@ class HermesDaemonTests(unittest.TestCase):
         self._original_insert_memory = hermes_daemon.insert_memory
         hermes_daemon.insert_memory = lambda memory: None
         recent_reply_texts.clear()
+        hermes_daemon.recent_reply_texts_by_context.clear()
+        hermes_daemon.recent_chat_history_by_context.clear()
         gw_wiki_cache.clear()
         last_map_comment_by_session.clear()
         map_comment_variant_by_session.clear()
@@ -115,6 +117,42 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(payload["realtime_planned_connections"], 1)
         self.assertEqual(payload["realtime_connection_budget"], 150)
         self.assertTrue(payload["realtime_budget_ok"])
+
+    def test_local_context_is_isolated_by_persona(self) -> None:
+        original_settings = hermes_daemon.settings
+        hermes_daemon.settings = replace(original_settings, supabase_url="", supabase_service_key="")
+        try:
+            azele_event = TelemetryEvent(
+                source="test",
+                persona="Azele",
+                event_type="player_chat",
+                sender="Player",
+                channel="party",
+                message="remember our charr plan",
+                session_id="local-playtest",
+            )
+            meliora_event = TelemetryEvent(
+                source="test",
+                persona="Meliora Andru",
+                event_type="player_chat",
+                sender="Player",
+                channel="party",
+                message="hey Mel, ready to scout?",
+                session_id="local-playtest",
+            )
+            hermes_daemon.record_recent_chat_event(azele_event)
+            hermes_daemon.record_recent_reply("Azele", "local-playtest", "Yes. Charr first, then we breathe.")
+            hermes_daemon.record_recent_chat_event(meliora_event)
+            hermes_daemon.record_recent_reply("Meliora Andru", "local-playtest", "I am checking the trail.")
+
+            prompt = build_character_reply_prompt(meliora_event)
+        finally:
+            hermes_daemon.settings = original_settings
+
+        self.assertIn("hey Mel, ready to scout?", prompt)
+        self.assertIn("I am checking the trail.", prompt)
+        self.assertNotIn("remember our charr plan", prompt)
+        self.assertNotIn("Charr first, then we breathe", prompt)
 
     def test_event_from_game_log_uses_metadata(self) -> None:
         event = event_from_game_log(
@@ -658,8 +696,17 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("City air helps. What do you usually do first", recent_companion_context())
 
     def test_prompt_includes_recent_conversation_transcript(self) -> None:
-        world_state.recent_chat_history.append("[Player]: what was that?")
-        recent_reply_texts.append("I meant the Ranik soldiers were pretending not to stare.")
+        previous_event = TelemetryEvent(
+            source="test",
+            persona="Azele",
+            event_type="player_chat",
+            sender="Player",
+            channel="party",
+            message="what was that?",
+            session_id="local-playtest",
+        )
+        hermes_daemon.record_recent_chat_event(previous_event)
+        hermes_daemon.record_recent_reply("Azele", "local-playtest", "I meant the Ranik soldiers were pretending not to stare.")
         event = event_from_game_log(
             {
                 "sender": "Player",
@@ -937,7 +984,16 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertGreaterEqual(context.confidence, 0.9)
 
     def test_duke_gaban_search_fallback_stays_quest_specific(self) -> None:
-        world_state.recent_chat_history.append("[Player]: where is Duke Gaban?")
+        previous_event = TelemetryEvent(
+            source="test",
+            persona="Azele",
+            event_type="player_chat",
+            sender="Player",
+            channel="party",
+            message="where is Duke Gaban?",
+            session_id="local-playtest",
+        )
+        hermes_daemon.record_recent_chat_event(previous_event)
         event = event_from_game_log(
             {
                 "sender": "Player",
@@ -1774,7 +1830,16 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("Azele can flirt back", prompt)
 
     def test_model_reply_accepts_duke_gaban_search_answer(self) -> None:
-        world_state.recent_chat_history.append("[Player]: where is Duke Gaban?")
+        previous_event = TelemetryEvent(
+            source="test",
+            persona="Azele",
+            event_type="player_chat",
+            sender="Player",
+            channel="party",
+            message="where is Duke Gaban?",
+            session_id="local-playtest",
+        )
+        hermes_daemon.record_recent_chat_event(previous_event)
         event = event_from_game_log(
             {
                 "sender": "Player",

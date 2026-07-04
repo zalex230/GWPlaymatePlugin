@@ -46,6 +46,8 @@ world_state = LiveWorldState(
     session_id=settings.active_session,
 )
 recent_reply_texts: deque[str] = deque(maxlen=12)
+recent_reply_texts_by_context: dict[tuple[str, str], deque[str]] = {}
+recent_chat_history_by_context: dict[tuple[str, str], deque[str]] = {}
 map_comment_variant_by_session: dict[tuple[str, str, int], int] = {}
 ambient_quip_variant_by_session: dict[tuple[str, str, int], int] = {}
 MAX_GW_CHAT_CHARS = 119
@@ -1086,6 +1088,49 @@ def known_persona_name(persona: str) -> str:
     return candidate
 
 
+def local_context_key(persona: str | None = None, session_id: str | None = None) -> tuple[str, str] | None:
+    persona_name = known_persona_name(persona or world_state.persona)
+    if not persona_name:
+        return None
+    session = (session_id or world_state.session_id or settings.active_session).strip() or settings.active_session
+    return persona_name.lower(), session
+
+
+def local_reply_lines(limit: int = 8, persona: str | None = None, session_id: str | None = None) -> list[str]:
+    key = local_context_key(persona, session_id)
+    if not key:
+        return list(recent_reply_texts)[-limit:]
+    lines = list(recent_reply_texts_by_context.get(key) or [])
+    if not lines and recent_reply_texts:
+        return list(recent_reply_texts)[-limit:]
+    return lines[-limit:]
+
+
+def record_recent_reply(persona: str, session_id: str, message: str) -> None:
+    key = local_context_key(persona, session_id)
+    if not key:
+        return
+    lines = recent_reply_texts_by_context.setdefault(key, deque(maxlen=12))
+    lines.append(message)
+
+
+def record_recent_chat_event(event: TelemetryEvent) -> None:
+    if event.event_type not in {"player_chat", "chat_log"}:
+        return
+    key = local_context_key(event.persona, event.session_id)
+    if not key:
+        return
+    lines = recent_chat_history_by_context.setdefault(key, deque(maxlen=settings.recent_chat_limit))
+    lines.append(f"[{event.sender}]: {event.message}")
+
+
+def local_chat_lines(limit: int = 6, persona: str | None = None, session_id: str | None = None) -> list[str]:
+    key = local_context_key(persona, session_id)
+    if not key:
+        return list(world_state.recent_chat_history)[-limit:]
+    return list(recent_chat_history_by_context.get(key) or [])[-limit:]
+
+
 def persona_profile(persona: str) -> str:
     persona_name = known_persona_name(persona) or "the active companion"
     persona_key = persona_name.lower()
@@ -1530,13 +1575,13 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
         }
     )
     with world_state_lock:
-        recent_reply_texts.append(reply.message)
+        record_recent_reply(persona, session_id, reply.message)
         world_state.mark_spoken()
     return reply
 
 
 def recent_companion_context(limit: int = 4, persona: str | None = None) -> str:
-    lines = list(recent_reply_texts)[-limit:]
+    lines = recent_reply_lines(limit=limit, persona=persona)
     if not lines:
         return "None"
     persona_name = known_persona_name(persona or world_state.persona) or "Companion"
@@ -1653,7 +1698,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"{gw1_context_hint(event)}\n\n"
         f"Recent conversation transcript:\n{clamp_prompt_section(recent_conversation_context(limit=6, persona=event.persona), max_chars=1200, from_end=True)}\n\n"
         f"Recent {persona_name} replies:\n{clamp_prompt_section(recent_companion_context(persona=event.persona), max_chars=700)}\n\n"
-        f"Recent live context:\n{clamp_prompt_section(world_state.prompt_context(), max_chars=900)}\n"
+        f"Recent live context:\n{clamp_prompt_section(live_prompt_context(event), max_chars=900)}\n"
         f"Relevant memories:\n{compact_relevant_memory_context(event.persona)}\n\n"
         f"GW Wiki background for player question:\n{clamp_prompt_section(gw_wiki_context(event), max_chars=1400)}\n\n"
         "Rules:\n"
@@ -2026,7 +2071,7 @@ def should_ignore_radar_alert(event: TelemetryEvent) -> bool:
 def recent_reply_lines(limit: int = 8, persona: str | None = None) -> list[str]:
     persona_name = known_persona_name(persona) if persona is not None else known_persona_name(world_state.persona)
     persona_name = persona_name or "Azele"
-    local_lines = list(recent_reply_texts)[-limit:]
+    local_lines = local_reply_lines(limit, persona=persona_name, session_id=world_state.session_id)
     if not _supabase_configured() or not persona_name:
         return [sanitize_prompt_context(line) for line in local_lines]
     lines: list[str] = []
@@ -2109,13 +2154,13 @@ def recent_conversation_context(limit: int = 10, persona: str | None = None) -> 
             print(f"Hermes conversation retrieval failed ({type(exc).__name__}).", flush=True)
 
     local_time = datetime.now(timezone.utc)
-    for line in list(world_state.recent_chat_history)[-max(1, limit // 2):]:
+    for line in local_chat_lines(max(1, limit // 2), persona=persona_name, session_id=world_state.session_id):
         match = re.match(r"\[(?P<speaker>[^\]]+)\]:\s*(?P<message>.+)", line)
         if match:
             speaker = "Player" if match.group("speaker").lower() in {"player", "alex"} else match.group("speaker")
             entries.append((local_time, speaker, readable_game_text(match.group("message"))))
             local_time = datetime.fromtimestamp(local_time.timestamp() + 0.001, timezone.utc)
-    for line in list(recent_reply_texts)[-max(1, limit // 2):]:
+    for line in local_reply_lines(max(1, limit // 2), persona=persona_name, session_id=world_state.session_id):
         entries.append((local_time, persona_name or "Companion", readable_game_text(line)))
         local_time = datetime.fromtimestamp(local_time.timestamp() + 0.001, timezone.utc)
 
@@ -2131,6 +2176,34 @@ def recent_conversation_context(limit: int = 10, persona: str | None = None) -> 
         return "\n".join(lines[-limit:]) or "None"
 
     return "None"
+
+
+def live_prompt_context(event: TelemetryEvent) -> str:
+    chat_lines = local_chat_lines(limit=6, persona=event.persona, session_id=event.session_id)
+    chat = "\n".join(chat_lines) or "None"
+    alert_lines: list[str] = []
+    for alert in list(world_state.recent_alerts)[-5:]:
+        event_type = alert.get("alert_type") or alert.get("event_type") or "event"
+        message = alert.get("message") or alert.get("agent_name") or ""
+        hostiles = alert.get("close_hostile_count") or alert.get("hostile_count") or 0
+        if message and hostiles:
+            alert_lines.append(f"{event_type}: {message} ({hostiles} hostiles)")
+        elif message:
+            alert_lines.append(f"{event_type}: {message}")
+        else:
+            alert_lines.append(str(event_type))
+    alerts = "\n".join(alert_lines) or "None"
+    return (
+        f"Persona: {known_persona_name(event.persona) or event.persona or world_state.persona}\n"
+        f"Map: {world_state.map_name or 'Unknown'} ({world_state.map_id})\n"
+        f"Instance Type: {world_state.instance_type}\n"
+        f"Active Quest: {world_state.active_quest_id} {world_state.active_quest_name}\n"
+        f"Quest Objectives: {world_state.active_quest_objectives or 'None'}\n"
+        f"Hostiles: {world_state.hostile_count} total, {world_state.close_hostile_count} close, closest {world_state.closest_hostile_distance:.0f}\n"
+        f"Player HP: {world_state.player_hp:.0%}\n"
+        f"Recent Chat:\n{chat}\n"
+        f"Recent Alerts:\n{alerts}\n"
+    )
 
 
 def reply_similarity(left: str, right: str) -> float:
@@ -2207,7 +2280,7 @@ def duplicate_recovery_reply() -> str:
 
 
 def last_companion_reply_text(persona: str | None = None) -> str:
-    local_lines = list(recent_reply_texts)
+    local_lines = local_reply_lines(1, persona=persona, session_id=world_state.session_id)
     if local_lines:
         return readable_game_text(local_lines[-1])
     lines = recent_reply_lines(limit=1, persona=persona)
@@ -3055,8 +3128,8 @@ def azele_scourge_beneath_reply(message: str) -> str:
 def context_mentions_duke_gaban(recent_context: str | None = None) -> bool:
     haystack = recent_context or "\n".join(
         [
-            *list(world_state.recent_chat_history)[-6:],
-            *list(recent_reply_texts)[-6:],
+            *local_chat_lines(6),
+            *local_reply_lines(6),
         ]
     )
     return bool(re.search(r"\b(?:duke\s+)?gaban\b|\bascalonian noble\b", haystack, re.IGNORECASE))
@@ -4741,6 +4814,7 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
             return []
         previous_map_id = world_state.map_id
         world_state.apply_event(event)
+        record_recent_chat_event(event)
         player_chat_at_generation_start = world_state.last_player_chat_at
 
         is_direct_player_chat = event.event_type == "player_chat" and event.channel == "party"
@@ -4866,7 +4940,7 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
 
     with world_state_lock:
         for reply in replies:
-            recent_reply_texts.append(reply.message)
+            record_recent_reply(persona, session_id, reply.message)
         world_state.mark_spoken()
     return replies
 
