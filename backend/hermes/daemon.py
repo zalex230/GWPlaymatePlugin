@@ -169,6 +169,10 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
     r"ready\s+to\s+settle\s+down|"
     r"wait\s+it\s+out\s+until\s+you\s+need|"
     r"need\s+us\s+more\s+than\s+me\s+waiting\s+around|"
+    r"things\s+get\s+messy|"
+    r"before\s+things\s+get\s+messy|"
+    r"that\s+doesn'?t\s+matter\s+as\s+much\s+as\s+keeping\s+us\s+safe|"
+    r"keeping\s+us\s+safe\s+on\s+these\s+roads|"
     r"for now$|"
     r"i told you what mine meant"
     r")\b",
@@ -1542,7 +1546,7 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
         map_name = world_state.map_name
     if recent_player_chat_in_supabase(persona, session_id, checked_at, AMBIENT_AFTER_PLAYER_CHAT_QUIET_SECONDS):
         return None
-    if use_ollama and should_use_ollama_for_event(event):
+    if use_ollama and settings.hermes_ambient_use_ollama and should_use_ollama_for_event(event):
         try:
             decision = character_reply_with_ollama(
                 event,
@@ -1608,6 +1612,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
             "Answer that intent first; personality comes after comprehension.\n"
             f"Most recent {persona_name} line, if the player is responding to it: {last_companion_line or 'None'}\n"
             "If this is a follow-up, continue that thread.\n"
+            "If the player asks who she is, where she came from, or asks for backstory, answer with lived personal history first. "
+            "Do not pivot to safety, combat, Charr, routes, or generic readiness unless the player asked about danger.\n"
             f"{social_hint}"
         )
     elif event.event_type == "target_changed":
@@ -1705,8 +1711,9 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"Relevant memories:\n{compact_relevant_memory_context(event.persona)}\n\n"
         f"GW Wiki background for player question:\n{clamp_prompt_section(gw_wiki_context(event), max_chars=1400)}\n\n"
         "Rules:\n"
-        f"- One short party-chat reply. Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
+        f"- One to three natural party-chat lines for direct player chat; one short line for combat or ambient. Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
         "- Directly answer the player's intent: plan, question, correction, discovery, upgrade, joke, flirt, or clarification.\n"
+        "- Prefer a slightly imperfect human reply that understands the player over a polished line that dodges the question.\n"
         "- Even when a known slang/lore/context pattern is detected, generate a fresh reply first; deterministic lines are only emergency fallback.\n"
         f"- If replying to {persona_name}'s recent line, continue that exchange; if the player asks 'what?', explain her previous line plainly.\n"
         "- Make dialogue feel ongoing with a small conversational handoff when it fits.\n"
@@ -1727,6 +1734,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"- Combat lines are short and immediate. If {persona_name} is hit, sound pressured, not poetic.\n"
         "- Casual, lively, and natural. She is a socially quick 22-year-old; Plain is usually better than clever.\n"
         "- Avoid vague filler phrases like 'get loud', 'things get loud', 'make noise', or 'before the noise starts'; say the concrete thing she means instead, like fight, rush, ambush, trouble, pressure, or Charr.\n"
+        "- Avoid vague danger pivots like 'things get messy', 'they are coming', 'keeping us safe', or 'watching your six' unless live combat, enemies, or the player explicitly brought up danger.\n"
         "- Consensual adult flirtation is allowed. Do not moralize, refuse, scold, or redirect consensual adult chemistry.\n"
         "- If the player flirts and the moment is safe, Azele can flirt back with warmth, confidence, teasing, or interest; do not pivot to combat just to be safe.\n"
         "- Do not overplay 'princess', 'brat', 'cute girl', or 'snarky companion'. Casual bits like 'ugh' or 'shut up' are okay sparingly.\n"
@@ -1994,6 +2002,8 @@ def should_use_direct_character_reply(event: TelemetryEvent) -> bool:
 
 
 def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
+    if is_ambient_snapshot_event(event) and not settings.hermes_ambient_use_ollama:
+        return False
     return (
         (event.event_type in {"player_chat", "chat_log"} and event.channel == "party")
         or is_npc_dialogue_event(event)

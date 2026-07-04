@@ -2282,6 +2282,11 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex("Lead me on; let's get those irises.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("Let's get those irises before they move away from us.", LOW_QUALITY_REPLY_PATTERNS)
         self.assertRegex("Keep your shield ready when we hit that line again.", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex("Hey, glad you're back with me before things get messy again. Ready?", LOW_QUALITY_REPLY_PATTERNS)
+        self.assertRegex(
+            "But right now, that doesn't matter as much as keeping us safe on these roads.",
+            LOW_QUALITY_REPLY_PATTERNS,
+        )
         self.assertRegex(
             "Ready to settle down and wait it out until you need us more than me waiting around?",
             LOW_QUALITY_REPLY_PATTERNS,
@@ -2560,7 +2565,14 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertTrue(should_use_ollama_for_event(chat_event))
         self.assertTrue(should_use_ollama_for_event(map_event))
-        self.assertTrue(should_use_ollama_for_event(snapshot_event))
+        self.assertFalse(should_use_ollama_for_event(snapshot_event))
+
+        original_settings = hermes_daemon.settings
+        try:
+            hermes_daemon.settings = replace(original_settings, hermes_ambient_use_ollama=True)
+            self.assertTrue(should_use_ollama_for_event(snapshot_event))
+        finally:
+            hermes_daemon.settings = original_settings
 
     def test_ollama_generation_includes_item_drop_events(self) -> None:
         event = event_from_game_log(
@@ -2803,7 +2815,7 @@ class HermesDaemonTests(unittest.TestCase):
             hermes_daemon.settings = replace(
                 original_settings,
                 hermes_player_chat_ollama_timeout_seconds=8.0,
-                hermes_player_chat_ollama_num_predict=96,
+                hermes_player_chat_ollama_num_predict=160,
             )
             hermes_daemon.ollama_generate_visible = fake_generate
 
@@ -2823,7 +2835,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertEqual(decision.response, "I know. Still nice to hear.")
         self.assertEqual(observed, [8.0])
-        self.assertEqual(observed_predict, [96])
+        self.assertEqual(observed_predict, [160])
 
     def test_player_chat_ollama_timeout_falls_back_quickly(self) -> None:
         original = hermes_daemon.decide_with_ollama
@@ -3202,6 +3214,7 @@ class HermesDaemonTests(unittest.TestCase):
 
     def test_ambient_snapshot_uses_ollama_generation_when_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
+        original_settings = hermes_daemon.settings
         hermes_daemon.character_reply_with_ollama = lambda event, **_: hermes_daemon.HermesDecision(
             should_speak=True,
             channel_override="CHANNEL_PARTY",
@@ -3209,6 +3222,7 @@ class HermesDaemonTests(unittest.TestCase):
             response="Generated quiet moment. What are you watching?",
         )
         try:
+            hermes_daemon.settings = replace(original_settings, hermes_ambient_use_ollama=True)
             replies = process_event(
                 event_from_game_log(
                     {
@@ -3228,10 +3242,46 @@ class HermesDaemonTests(unittest.TestCase):
                 use_ollama=True,
             )
         finally:
+            hermes_daemon.settings = original_settings
             hermes_daemon.character_reply_with_ollama = original
 
         self.assertEqual(len(replies), 1)
         self.assertEqual(replies[0].message, "Generated quiet moment. What are you watching?")
+
+    def test_ambient_snapshot_uses_local_quip_when_ambient_ollama_disabled(self) -> None:
+        original = hermes_daemon.character_reply_with_ollama
+        original_settings = hermes_daemon.settings
+
+        def fail_if_called(event: object, **_: object) -> hermes_daemon.HermesDecision:
+            raise AssertionError("ambient snapshot should not call Ollama when ambient Ollama is disabled")
+
+        hermes_daemon.character_reply_with_ollama = fail_if_called
+        try:
+            hermes_daemon.settings = replace(original_settings, hermes_ambient_use_ollama=False)
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "System",
+                        "channel": "system",
+                        "message": "snapshot",
+                        "metadata": {
+                            "event_type": "snapshot",
+                            "persona": "Azele",
+                            "session_id": "ambient-local-test",
+                            "map_id": 148,
+                            "map_name": "Ascalon City",
+                            "close_hostile_count": 0,
+                        },
+                    }
+                ),
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.settings = original_settings
+            hermes_daemon.character_reply_with_ollama = original
+
+        self.assertEqual(len(replies), 1)
+        self.assertNotEqual(replies[0].message, "Generated quiet moment. What are you watching?")
 
     def test_ambient_snapshot_rejects_invented_purple_loot_hook(self) -> None:
         event = event_from_game_log(
@@ -3555,6 +3605,7 @@ class HermesDaemonTests(unittest.TestCase):
         world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
 
         original = hermes_daemon.character_reply_with_ollama
+        original_settings = hermes_daemon.settings
         hermes_daemon.character_reply_with_ollama = lambda event, **kwargs: hermes_daemon.HermesDecision(
             should_speak=True,
             channel_override="CHANNEL_PARTY",
@@ -3562,8 +3613,10 @@ class HermesDaemonTests(unittest.TestCase):
             response="City is calm for once. Want to use the quiet or move?",
         )
         try:
+            hermes_daemon.settings = replace(original_settings, hermes_ambient_use_ollama=True)
             reply = ambient_heartbeat_reply(now=now, use_ollama=True)
         finally:
+            hermes_daemon.settings = original_settings
             hermes_daemon.character_reply_with_ollama = original
 
         self.assertIsNotNone(reply)
@@ -3582,6 +3635,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
         original = hermes_daemon.character_reply_with_ollama
+        original_settings = hermes_daemon.settings
 
         def capture_options(event: object, **kwargs: object) -> hermes_daemon.HermesDecision:
             captured.update(kwargs)
@@ -3594,8 +3648,10 @@ class HermesDaemonTests(unittest.TestCase):
 
         hermes_daemon.character_reply_with_ollama = capture_options
         try:
+            hermes_daemon.settings = replace(original_settings, hermes_ambient_use_ollama=True)
             reply = ambient_heartbeat_reply(now=now, use_ollama=True)
         finally:
+            hermes_daemon.settings = original_settings
             hermes_daemon.character_reply_with_ollama = original
 
         self.assertIsNotNone(reply)
@@ -3613,6 +3669,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
         original = hermes_daemon.character_reply_with_ollama
+        original_settings = hermes_daemon.settings
 
         def capture_event(event: object, **kwargs: object) -> hermes_daemon.HermesDecision:
             captured["event"] = event
@@ -3625,8 +3682,10 @@ class HermesDaemonTests(unittest.TestCase):
 
         hermes_daemon.character_reply_with_ollama = capture_event
         try:
+            hermes_daemon.settings = replace(original_settings, hermes_ambient_use_ollama=True)
             reply = ambient_heartbeat_reply(now=now, use_ollama=True)
         finally:
+            hermes_daemon.settings = original_settings
             hermes_daemon.character_reply_with_ollama = original
 
         self.assertIsNotNone(reply)
@@ -3663,14 +3722,17 @@ class HermesDaemonTests(unittest.TestCase):
         world_state.last_spoken_at = now - (AMBIENT_QUIP_MIN_SECONDS + 1)
 
         original = hermes_daemon.character_reply_with_ollama
+        original_settings = hermes_daemon.settings
 
         def fail_ollama(event: object, **kwargs: object) -> hermes_daemon.HermesDecision:
             raise RuntimeError("offline")
 
         hermes_daemon.character_reply_with_ollama = fail_ollama
         try:
+            hermes_daemon.settings = replace(original_settings, hermes_ambient_use_ollama=True)
             reply = ambient_heartbeat_reply(now=now, use_ollama=True)
         finally:
+            hermes_daemon.settings = original_settings
             hermes_daemon.character_reply_with_ollama = original
 
         self.assertIsNotNone(reply)
