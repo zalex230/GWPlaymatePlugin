@@ -495,6 +495,19 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertFalse(lines[0].endswith(" on"))
         self.assertTrue(all(len(line) <= hermes_daemon.MAX_GW_CHAT_CHARS for line in lines))
 
+    def test_split_gw_chat_lines_rebalances_short_orphan_tail(self) -> None:
+        text = (
+            "I'm done looping it if you don't want more details though; tell me what actually happened next since that run is gone "
+            "now anyway."
+        )
+
+        lines = hermes_daemon.split_gw_chat_lines(text)
+
+        self.assertGreater(len(lines), 1)
+        self.assertNotEqual(lines[-1], "now anyway.")
+        self.assertIn("run is gone now anyway", lines[-1])
+        self.assertTrue(all(len(line) <= hermes_daemon.MAX_GW_CHAT_CHARS for line in lines))
+
     def test_ambient_quip_rotates_when_recent_replies_are_repeated(self) -> None:
         original_recent = hermes_daemon.recent_reply_lines
         repeated = "If we stay too long, I’m going to start fussing with my hair, and then you have to pretend not to notice."
@@ -1907,6 +1920,62 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(len(prompts), 2)
         self.assertIn("overlong model reply", prompts[1])
 
+    def test_retry_prompt_uses_active_persona_name(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "where did your name come from?",
+                "metadata": {"event_type": "player_chat", "persona": "Meliora Andru"},
+            }
+        )
+
+        prompt = hermes_daemon.build_player_intent_retry_prompt(event, "Maybe later.", "missed clear player intent")
+
+        self.assertIn("Return only Meliora Andru's corrected reply", prompt)
+        self.assertNotIn("Return only Azele's corrected reply", prompt)
+
+    def test_back_then_is_not_treated_as_dangling_shape(self) -> None:
+        reply = 'It was not a "first" in any grand sense, just something that still stung back then.'
+
+        self.assertFalse(hermes_daemon.model_reply_has_bad_shape(reply))
+
+    def test_character_reply_salvages_direct_followup_when_retry_fails(self) -> None:
+        previous = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "tell me more about when you were 15",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+        hermes_daemon.record_recent_chat_event(previous)
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "i want to hear more from your perspective",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+        responses = iter(
+            [
+                'It was not a "first" in any grand sense, just something that still stung back then.',
+                "Yeah, I’m here. What are we doing?",
+            ]
+        )
+        original_generate = hermes_daemon.ollama_generate_visible
+        try:
+            hermes_daemon.ollama_generate_visible = lambda prompt, timeout_seconds=None, num_predict=None: next(responses)
+
+            decision = hermes_daemon.character_reply_with_ollama(event, timeout_seconds=1.0, num_predict=160, record_id=3097)
+        finally:
+            hermes_daemon.ollama_generate_visible = original_generate
+
+        self.assertTrue(decision.should_speak)
+        self.assertIn("back then", decision.response)
+        self.assertNotIn("What are we doing", decision.response)
+
     def test_flirty_player_chat_prompt_prioritizes_social_intent(self) -> None:
         prompt = build_character_reply_prompt(
             event_from_game_log(
@@ -3048,6 +3117,38 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(len(replies), 1)
         self.assertNotIn("one more detail", replies[0].message.lower())
         self.assertTrue(replies[0].message)
+
+    def test_stale_direct_chat_reply_is_discarded_after_newer_player_chat(self) -> None:
+        original = hermes_daemon.decide_with_ollama
+
+        def slow_reply(_event: hermes_daemon.TelemetryEvent, *, record_id: int | None = None) -> hermes_daemon.HermesDecision:
+            with hermes_daemon.world_state_lock:
+                hermes_daemon.world_state.last_player_chat_at = time.time()
+            return hermes_daemon.HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="NORMAL",
+                response="Old answer that should not arrive late.",
+            )
+
+        hermes_daemon.decide_with_ollama = slow_reply
+        try:
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "Player",
+                        "channel": "party",
+                        "message": "first version of the question",
+                        "metadata": {"event_type": "player_chat", "persona": "Azele", "session_id": "stale-direct"},
+                    }
+                ),
+                record_id=901,
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.decide_with_ollama = original
+
+        self.assertEqual(replies, [])
 
     def test_unknown_quest_change_is_silent(self) -> None:
         replies = process_event(

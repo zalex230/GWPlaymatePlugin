@@ -165,6 +165,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
     r"hit that line again|"
     r"no place for peace-talkers|"
     r"alex(?:ie|i)?|"
+    r"level\s*15\s+bot|"
     r"\bthe\s+player\b|"
     r"ready\s+to\s+settle\s+down|"
     r"wait\s+it\s+out\s+until\s+you\s+need|"
@@ -185,7 +186,7 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
 )
 FILLER_ONLY_REPLY_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]*(?:yeah|okay|cute)?[.!?]?\s*$", re.IGNORECASE)
 DANGLING_REPLY_ENDING_PATTERN = re.compile(
-    r"(?:\b(?:and|but|or|so|because|before|after|when|while|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\b(?:not\s+worth|so|because|then|and|but)\s*(?:we|i|you|they|he|she|it|things)?)$",
+    r"(?:\b(?:and|but|or|so|because|before|after|when|while|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\bthen\s+things|\b(?:not\s+worth|so|because|and|but)\s*(?:we|i|you|they|he|she|it|things)?)$",
     re.IGNORECASE,
 )
 DANGLING_SPLIT_ENDING_PATTERN = re.compile(
@@ -1856,6 +1857,7 @@ def build_decision_prompt(event: TelemetryEvent) -> str:
 
 
 def build_player_intent_retry_prompt(event: TelemetryEvent, rejected_reply: str, reason: str) -> str:
+    persona_name = known_persona_name(event.persona) or "the companion"
     return (
         build_character_reply_prompt(event)
         + "\n\n"
@@ -1866,7 +1868,7 @@ def build_player_intent_retry_prompt(event: TelemetryEvent, rejected_reply: str,
         "- Anchor on the nouns, pronouns, question, joke, correction, or plan in the latest player message and recent transcript.\n"
         "- Finish the thought cleanly. Do not stop on dangling words like 'so we', 'because', 'and', or 'then'.\n"
         "- Do not answer a different topic. Do not use a generic check-in. Do not repeat the rejected draft.\n"
-        "Return only Azele's corrected reply."
+        f"Return only {persona_name}'s corrected reply."
     )
 
 
@@ -1936,6 +1938,20 @@ def rebalance_dangling_chat_splits(lines: list[str]) -> list[str]:
             continue
         balanced[index] = " ".join(words[:-1]).rstrip(" ,;:")
         balanced[index + 1] = candidate_next
+    if len(balanced) >= 2:
+        last_words = balanced[-1].split()
+        previous_words = balanced[-2].split()
+        if 0 < len(last_words) <= 3 and len(previous_words) > 6:
+            while len(last_words) < 5 and previous_words:
+                moved = previous_words.pop()
+                candidate_last = " ".join([moved] + last_words).strip()
+                candidate_previous = " ".join(previous_words).strip()
+                if len(candidate_last) > MAX_GW_CHAT_CHARS or len(candidate_previous) < 40:
+                    previous_words.append(moved)
+                    break
+                last_words = candidate_last.split()
+            balanced[-2] = " ".join(previous_words).rstrip(" ,;:")
+            balanced[-1] = " ".join(last_words).strip()
     return [line for line in balanced if line]
 
 
@@ -3268,12 +3284,17 @@ def is_loot_chest_location_context(message: str, recent_context: str | None = No
     lowered = readable_game_text(message).lower()
     context = readable_game_text(recent_context or "").lower()
     has_chest_location = bool(re.search(r"\b(?:chests?|stash(?:es)?|crate|tunnels?|catacombs?|forsaken)\b", lowered))
+    has_explicit_container = bool(re.search(r"\b(?:chests?|stash(?:es)?|crate)\b", lowered))
     has_loot_signal = bool(re.search(r"\b(?:loot|drops?|dropped|gold|purple|purp|green|rarity|items?|bow|weapon|rolls?)\b", lowered))
     has_recent_loot_context = bool(
         re.search(r"\b(?:loot|drops?|dropped|gold|purple|purp|green|rarity|items?|bow|weapon|rolls?|where else|what do you usually do first)\b", context)
     )
     explicit_tunnel_chest = bool(re.search(r"\b(?:tunnels?|catacombs?|forsaken)\b", lowered) and re.search(r"\bchests?\b", lowered))
-    return bool(explicit_tunnel_chest or (has_chest_location and (has_loot_signal or has_recent_loot_context)))
+    return bool(
+        explicit_tunnel_chest
+        or (has_chest_location and has_loot_signal)
+        or (has_explicit_container and has_recent_loot_context)
+    )
 
 
 def azele_loot_chest_location_reply(message: str) -> str:
@@ -3920,6 +3941,48 @@ def salvage_overlong_model_reply(reply: str, event: TelemetryEvent) -> str | Non
     return None
 
 
+def direct_chat_salvage_blocked(reply: str, event: TelemetryEvent) -> bool:
+    if leaks_ambient_scheduler_metaphor(reply, event):
+        return True
+    if leaks_visible_self_management(reply):
+        return True
+    if misreads_level_15_as_age(reply, event):
+        return True
+    if FILLER_ONLY_REPLY_PATTERN.search(reply):
+        return True
+    if LOW_QUALITY_REPLY_PATTERNS.search(reply):
+        return True
+    if is_azele_wearable_context(event.message) and misdirects_wearable_to_player(reply):
+        return True
+    if misdirects_voice_preference(reply, event):
+        return True
+    if invents_self_duplicate(reply):
+        return True
+    return False
+
+
+def salvage_direct_player_chat_reply(reply: str, event: TelemetryEvent) -> str | None:
+    if event.event_type != "player_chat" or event.channel != "party":
+        return None
+    cleaned = repair_model_reply(reply)
+    _, cleaned = split_spoken_expression_label(cleaned)
+    cleaned = cleaned.strip()
+    if not cleaned or direct_chat_salvage_blocked(cleaned, event):
+        return None
+    if DANGLING_REPLY_ENDING_PATTERN.search(cleaned.rstrip(" .!?")):
+        return None
+    if not re.search(r"[.!?)]$", cleaned):
+        cleaned = f"{cleaned}."
+    max_lines = 6 if re.search(r"\b(?:tell me more|explain|elaborate|story|backstory|past|perspective|what happened|how did|be vivid)\b", event.message, re.IGNORECASE) else 4
+    lines = split_gw_chat_lines(cleaned, max_lines=max_lines)
+    if not lines or any(DANGLING_REPLY_ENDING_PATTERN.search(line.rstrip(" .!?")) for line in lines):
+        return None
+    candidate = " ".join(lines).strip()
+    if not candidate or direct_chat_salvage_blocked(candidate, event):
+        return None
+    return candidate
+
+
 def repair_model_reply(reply: str) -> str:
     cleaned = re.sub(r"\s+", " ", reply or "").strip()
     cleaned = re.sub(r"\bWhat['’]?ve\s+got\b", "What's got", cleaned, flags=re.IGNORECASE)
@@ -3995,6 +4058,8 @@ def character_reply_with_ollama(
                 if str(exc) == "overlong model reply" or str(retry_exc or "") == "overlong model reply"
                 else salvage_complete_model_reply(cleaned, event)
             )
+            if not salvage:
+                salvage = salvage_direct_player_chat_reply(cleaned, event)
             if salvage:
                 print(
                     f"Ollama character reply salvaged complete prefix after retry failure "
@@ -5162,6 +5227,15 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
     if event.event_type in MAP_COMMENT_EVENT_TYPES or is_ambient_snapshot_event(event):
         with world_state_lock:
             if world_state.last_player_chat_at > player_chat_at_generation_start:
+                return []
+    if is_direct_player_chat:
+        with world_state_lock:
+            if world_state.last_player_chat_at > player_chat_at_generation_start:
+                print(
+                    f"Hermes discarded stale direct reply for {event_debug_label(event, record_id=record_id)} "
+                    "because a newer player chat arrived.",
+                    flush=True,
+                )
                 return []
     replies = replies_from_decision(
         decision,
