@@ -132,10 +132,12 @@ Run Hermes on the machine that hosts the local model or fallback daemon:
 python -m backend.hermes.daemon
 ```
 
-For free-tier Supabase use, leave `HERMES_ENABLE_REALTIME=false` and let Hermes poll with stored
-watermarks. For the first plumbing test, leave `HERMES_USE_OLLAMA=false`. Once the closed loop works,
-set `HERMES_USE_OLLAMA=true` and keep `OLLAMA_MODEL=hermes-qwen35-4b:latest` so Hermes uses the fast
-quantized Qwen model.
+For the most conservative free-tier Supabase use, leave `HERMES_ENABLE_REALTIME=false` and let Hermes
+poll with stored watermarks. If you enable Realtime, keep `HERMES_REALTIME_CONNECTION_BUDGET=150` so
+Hermes plans for one Realtime connection while preserving a 50-connection buffer under Supabase's
+200-connection free-tier limit. For the first plumbing test, leave `HERMES_USE_OLLAMA=false`. Once the
+closed loop works, set `HERMES_USE_OLLAMA=true` and keep `OLLAMA_MODEL=hermes-qwen35-4b:latest` so
+Hermes uses the fast quantized Qwen model.
 
 Optional Kokoro TTS audio needs three pieces:
 

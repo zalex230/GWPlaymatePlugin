@@ -59,6 +59,7 @@ AMBIENT_HEARTBEAT_POLL_SECONDS = 10.0
 AMBIENT_HEARTBEAT_ACTIVITY_SECONDS = 1800.0
 AMBIENT_OLLAMA_TIMEOUT_SECONDS = 8.0
 AMBIENT_OLLAMA_NUM_PREDICT = 40
+HERMES_REALTIME_PLANNED_CONNECTIONS = 1
 UNCONSUMED_REPLY_STALE_SECONDS = 60.0
 MAP_ENTRY_AFTER_PLAYER_CHAT_QUIET_SECONDS = 35.0
 PERSONA_MEMORY_DIR = Path(__file__).with_name("personas")
@@ -4871,6 +4872,7 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    realtime_planned_connections = HERMES_REALTIME_PLANNED_CONNECTIONS if settings.hermes_enable_realtime else 0
     return {
         "ok": True,
         "service": "gwplaymate-hermes",
@@ -4878,6 +4880,9 @@ def health() -> dict[str, Any]:
         "model": settings.ollama_model,
         "supabase_configured": _supabase_configured(),
         "realtime_enabled": settings.hermes_enable_realtime,
+        "realtime_planned_connections": realtime_planned_connections,
+        "realtime_connection_budget": settings.hermes_realtime_connection_budget,
+        "realtime_budget_ok": realtime_planned_connections <= settings.hermes_realtime_connection_budget,
     }
 
 
@@ -5028,18 +5033,30 @@ async def ambient_heartbeat_loop() -> None:
 
 
 async def main_async() -> None:
+    realtime_subscription_started = False
     if _supabase_configured():
         require_supabase_settings(settings)
         if settings.hermes_enable_realtime:
-            await subscribe_to_game_logs()
+            if HERMES_REALTIME_PLANNED_CONNECTIONS <= settings.hermes_realtime_connection_budget:
+                await subscribe_to_game_logs()
+                realtime_subscription_started = True
+            else:
+                print(
+                    "Supabase Realtime disabled: Hermes planned connections exceed "
+                    f"HERMES_REALTIME_CONNECTION_BUDGET={settings.hermes_realtime_connection_budget}.",
+                    flush=True,
+                )
         asyncio.create_task(poll_supabase_events())
         asyncio.create_task(ambient_heartbeat_loop())
     if settings.hermes_use_ollama:
         asyncio.create_task(ollama_keepalive_loop())
     mode = "Ollama" if settings.hermes_use_ollama else "fallback rules"
     print(f"GWPlaymate companion daemon listening on {settings.hermes_host}:{settings.hermes_port} ({mode}).")
-    if settings.hermes_enable_realtime:
-        print("Supabase Realtime subscription is enabled for audit/backfill events.")
+    if realtime_subscription_started:
+        print(
+            "Supabase Realtime subscription is enabled for audit/backfill events "
+            f"({HERMES_REALTIME_PLANNED_CONNECTIONS}/{settings.hermes_realtime_connection_budget} planned connections)."
+        )
     elif _supabase_configured():
         print("Supabase polling is enabled; Realtime subscriptions are disabled for free-tier safety.")
     config = uvicorn.Config(app, host=settings.hermes_host, port=settings.hermes_port, log_level="info")

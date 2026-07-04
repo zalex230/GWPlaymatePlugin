@@ -78,9 +78,11 @@ letting Supabase act as the audit and memory store. It reads new `game_logs` and
 rows, keeps recent context in RAM, asks Ollama for a small JSON decision, and inserts approved lines
 into `companion_replies`.
 
-`HERMES_ENABLE_REALTIME=true` is still supported for experiments, but leave it off for normal playtests.
-When Realtime is off, tune `HERMES_POLL_IDLE_SECONDS`, `HERMES_POLL_ACTIVE_SECONDS`, and
-`HERMES_POLL_ACTIVE_WINDOW_SECONDS` instead of adding more Realtime clients.
+`HERMES_ENABLE_REALTIME=true` is supported for low-latency playtests. Hermes uses one planned
+Realtime connection for its single Supabase channel; keep `HERMES_REALTIME_CONNECTION_BUDGET=150` to
+preserve a 50-connection buffer under Supabase's 200-connection free-tier limit. When Realtime is off,
+tune `HERMES_POLL_IDLE_SECONDS`, `HERMES_POLL_ACTIVE_SECONDS`, and `HERMES_POLL_ACTIVE_WINDOW_SECONDS`
+instead of adding more Realtime clients.
 
 For the first closed-loop test, leave `HERMES_USE_OLLAMA=false`. In this fallback mode Hermes replies
 deterministically to party `player_chat` rows, which proves the Supabase round trip without involving

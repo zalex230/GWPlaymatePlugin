@@ -99,6 +99,23 @@ class HermesDaemonTests(unittest.TestCase):
             finally:
                 hermes_daemon.settings = original_settings
 
+    def test_health_reports_realtime_connection_budget(self) -> None:
+        original_settings = hermes_daemon.settings
+        hermes_daemon.settings = replace(
+            original_settings,
+            hermes_enable_realtime=True,
+            hermes_realtime_connection_budget=150,
+        )
+        try:
+            payload = hermes_daemon.health()
+        finally:
+            hermes_daemon.settings = original_settings
+
+        self.assertTrue(payload["realtime_enabled"])
+        self.assertEqual(payload["realtime_planned_connections"], 1)
+        self.assertEqual(payload["realtime_connection_budget"], 150)
+        self.assertTrue(payload["realtime_budget_ok"])
+
     def test_event_from_game_log_uses_metadata(self) -> None:
         event = event_from_game_log(
             {

@@ -48,6 +48,7 @@ class BackendSettings:
     hermes_host: str = os.getenv("HERMES_HOST", "127.0.0.1")
     hermes_port: int = _int_env("HERMES_PORT", 8797)
     hermes_enable_realtime: bool = _bool_env("HERMES_ENABLE_REALTIME", False)
+    hermes_realtime_connection_budget: int = _int_env("HERMES_REALTIME_CONNECTION_BUDGET", 150)
     hermes_audit_replies: bool = _bool_env("HERMES_AUDIT_REPLIES", True)
     hermes_poll_idle_seconds: float = _float_env("HERMES_POLL_IDLE_SECONDS", 15.0)
     hermes_poll_active_seconds: float = _float_env("HERMES_POLL_ACTIVE_SECONDS", 3.0)
