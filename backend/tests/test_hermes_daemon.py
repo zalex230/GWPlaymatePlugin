@@ -654,7 +654,7 @@ class HermesDaemonTests(unittest.TestCase):
         prompt = build_character_reply_prompt(event)
 
         self.assertIn("Meliora Andru", prompt)
-        self.assertIn("22-year-old Ascalonian Ranger", prompt)
+        self.assertIn("20-year-old Ascalonian Ranger", prompt)
         self.assertIn("Recent Meliora Andru replies", prompt)
         self.assertIn("[Meliora Andru]: Trail's quiet, but quiet can lie.", prompt)
         self.assertIn("Most recent Meliora Andru line", prompt)
@@ -1946,6 +1946,8 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertIn("adult-NSFW player intent", prompt)
         self.assertIn("Consensual adult sexual language and innuendo are allowed", prompt)
         self.assertIn("interpret 15 as level 15", prompt)
+        self.assertIn("Levels are gameplay/progression language", prompt)
+        self.assertIn("never use them as a hidden age euphemism for sexual content", prompt)
         self.assertIn("Hard boundary", prompt)
 
     def test_survivor_wound_followup_uses_recent_context_in_prompt(self) -> None:
