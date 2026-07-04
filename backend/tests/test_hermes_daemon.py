@@ -2310,6 +2310,11 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertTrue(model_reply_has_bad_shape("I can handle whatever comes up from them later on if needed too since they're not worth"))
         self.assertTrue(
             model_reply_has_bad_shape(
+                "My folks named it after their harvest festival; simple enough until Prince Rurik showed up in Ascalon City then things"
+            )
+        )
+        self.assertTrue(
+            model_reply_has_bad_shape(
                 "I know you do like that outfit though it does fit well on me today isn't it nice hearing from someone who knows exactly why they look good here"
             )
         )
@@ -2340,6 +2345,39 @@ class HermesDaemonTests(unittest.TestCase):
                 "Morning! Just needed some fresh air after all those tunnels earlier anyway... ready for whatever comes next though."
             )
         )
+
+    def test_meliora_name_origin_fallback_answers_directly(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "so where did you get the name Meliora",
+                "metadata": {"event_type": "player_chat", "persona": "Meliora Andru"},
+            }
+        )
+
+        decision = fallback_rule_decision(event)
+
+        self.assertIn("better things", decision.response.lower())
+        self.assertIn("andru", decision.response.lower())
+        self.assertNotIn("keep watch", decision.response.lower())
+        self.assertNotIn("rurik", decision.response.lower())
+
+    def test_meliora_allows_personal_ashford_references(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "so where did you get the name Meliora",
+                "metadata": {"event_type": "player_chat", "persona": "Meliora Andru"},
+            }
+        )
+        reply = (
+            "My mother chose Meliora because it meant 'better things' to her. "
+            "Andru is my Ashford family name."
+        )
+
+        self.assertEqual(validate_model_reply(reply, event), reply)
 
     def test_model_reply_allows_more_fluid_banter_and_punctuation(self) -> None:
         event = event_from_game_log(

@@ -176,11 +176,11 @@ LOW_QUALITY_REPLY_PATTERNS = re.compile(
 )
 FILLER_ONLY_REPLY_PATTERN = re.compile(r"^\s*(?:m+h+m+|m+h+mm+|m+hm+|mm+|hm+)[,.\s]*(?:yeah|okay|cute)?[.!?]?\s*$", re.IGNORECASE)
 DANGLING_REPLY_ENDING_PATTERN = re.compile(
-    r"(?:\b(?:and|but|or|so|because|before|after|when|while|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\b(?:not\s+worth|so|because|then|and|but)\s*(?:we|i|you|they|he|she|it)?)$",
+    r"(?:\b(?:and|but|or|so|because|before|after|when|while|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|what|who|where|why|how)|\b(?:not\s+worth|so|because|then|and|but)\s*(?:we|i|you|they|he|she|it|things)?)$",
     re.IGNORECASE,
 )
 DANGLING_SPLIT_ENDING_PATTERN = re.compile(
-    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|on|in|at|into|over|under|near|toward|towards)$",
+    r"\b(?:and|but|or|so|because|before|after|when|while|though|although|if|until|like|than|just|the|a|an|to|of|for|with|from|by|on|in|at|into|over|under|near|toward|towards|then\s+things)$",
     re.IGNORECASE,
 )
 MEMORY_MEANINGFUL_EVENT_TYPES = {
@@ -1171,6 +1171,8 @@ def persona_profile(persona: str) -> str:
         return (
             "Meliora Andru is a 22-year-old human Ranger from Ashford in pre-Searing Ascalon, now living around Regent Valley. "
             "She grew up in a humble farming family, with a trail-keeping hunter father and an herbalist mother who helped nearby farmers and Ashford Abbey. "
+            "Her mother chose the name Meliora because it meant 'better things' to the family: hope that their daughter would grow into something steadier and brighter than the lean years they had known. "
+            "Andru is her Ashford family name. "
             "As a teenager she worked at The Foible's Fair Inn, where she learned to read pride, loneliness, bravado, and desire with a sharp eye. "
             "She knows she is attractive and can use charm, warmth, wit, and a well-placed compliment to calm tempers, gather information, or steer a stubborn person, "
             "but she draws the line at cruelty, false affection, or needless heartbreak. "
@@ -1202,6 +1204,7 @@ def compact_persona_profile(persona: str) -> str:
     if persona_key == "meliora andru":
         return (
             "Meliora Andru: 22-year-old Ascalonian Ranger from Ashford and Regent Valley in pre-Searing. "
+            "Her mother chose 'Meliora' because it meant 'better things' to the family; Andru is her Ashford family name. "
             "Former barmaid at The Foible's Fair Inn, trained by Harlan Beck, observant, practical, slow to trust, "
             "comfortable with charm and teasing when it fits, and protective of Ascalon. No post-Searing knowledge."
         )
@@ -1716,6 +1719,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Charr are real enemies threatening Ascalon; hunting or fighting them means defending Ascalon and home. Never imply Charr need saving; head toward the Wall/Northlands if needed.\n"
         "- Level-up praise means thank the player and feel stronger, not red irises, bag slots, or pack upgrades.\n"
         f"- If the player talks about {persona_name}'s voice, TTS, Kokoro, Bella, Heart, sound, or pronunciation, answer that directly. Do not pivot to Charr, combat, quests, or old context.\n"
+        f"- If the player asks where {persona_name}'s name came from or what it means, answer from {persona_name}'s personal background. Do not pivot to the current quest, Prince Rurik, Charr, or route planning.\n"
         f"- Dwarven Ale or alcohol consumables happen to {persona_name}; react directly to how it feels.\n"
         f"- Inventory, Small Equipment Pack, and red iris flowers are storage; armor/clothing mentions are usually {persona_name}'s visible outfit/style change; answer the appearance/practical question directly. For Azele, answer longer skirt or her current mini skirt directly and assume it is Azele's gear/body/clothes.\n"
         "- Gamer/GW slang: gg means good game/nice fight; ggwp/wp means well played; ty/thx means thanks; yw/np means no problem; res/rez means resurrect; brb/afk/bio are short breaks; omw means on my way; pull/aggro/kite/aoe/dps/heal/prot/wipe/drop have normal MMO meanings; purple/purp means purple-rarity loot; green means unique loot; tunnel run means The Scourge Beneath.\n"
@@ -2491,6 +2495,23 @@ def is_player_checkin(message: str) -> bool:
     )
 
 
+def is_name_origin_context(message: str) -> bool:
+    lowered = re.sub(r"\s+", " ", readable_game_text(message).lower()).strip(" .!?")
+    return bool(
+        re.search(r"\bwhere\s+did\s+(?:you\s+)?get\s+(?:the\s+)?name\b", lowered)
+        or re.search(r"\bwhere\s+(?:does|did)\s+(?:your\s+)?name\s+come\s+from\b", lowered)
+        or re.search(r"\bwhat\s+does\s+(?:your\s+)?name\s+mean\b", lowered)
+        or re.search(r"\bwhy\s+(?:are|were)\s+you\s+(?:called|named)\b", lowered)
+        or re.search(r"\bwhy\s+(?:meliora|andru)\b", lowered)
+    )
+
+
+def meliora_name_origin_reply() -> str:
+    return (
+        "Meliora means better things. My mother chose it as hope, and Andru is my Ashford family name."
+    )
+
+
 def azele_player_checkin_reply(message: str) -> str:
     lowered = readable_game_text(message).lower()
     player_feels_good = bool(re.search(r"\b(?:feeling|feel)\s+(?:good|great|better|fine|okay|ok)\b", lowered))
@@ -2625,6 +2646,8 @@ def invents_unsupported_rumor(reply: str, event: TelemetryEvent) -> bool:
 
 def invents_unsupported_ashford_reference(reply: str, event: TelemetryEvent) -> bool:
     if not re.search(r"\bashford(?:\s+abbey)?\b|\babbey\b", reply, re.IGNORECASE):
+        return False
+    if known_persona_name(event.persona).lower() == "meliora andru":
         return False
     evidence = " ".join(
         [
@@ -3804,6 +3827,8 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
         persona = event.persona.strip()
         if persona.lower() == "azele":
             response = azele_fast_reply(event)
+        elif persona.lower() == "meliora andru" and is_name_origin_context(event.message):
+            response = meliora_name_origin_reply()
         else:
             response = "I’m with you. Say the word and I’ll keep watch."
         return HermesDecision(
