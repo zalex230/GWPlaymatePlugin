@@ -1017,6 +1017,47 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex(reply.response.lower(), r"gaban|side|chamber|alcove|dead-end|catacombs|escort|search")
         self.assertNotRegex(reply.response.lower(), r"first pull|tunnels it is|wrap around|keep it tight")
 
+    def test_loot_chest_followup_does_not_become_generic_tunnel_plan(self) -> None:
+        hermes_daemon.record_recent_reply(
+            "Azele",
+            "local-playtest",
+            "Tell me where else this kind of loot drops around here so I can stack it up properly?",
+        )
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "i think its all in the tunnels. in the chest",
+                "metadata": {"event_type": "player_chat", "persona": "Azele", "map_id": 148, "map_name": "Ascalon City"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertFalse(should_use_fast_fallback_before_ollama(event))
+        self.assertRegex(reply.response.lower(), r"chest|loot|gold|drop|tunnel")
+        self.assertNotRegex(reply.response.lower(), r"wrap around|first pull|into the tunnels")
+
+    def test_model_reply_accepts_loot_chest_location_continuation(self) -> None:
+        hermes_daemon.record_recent_reply(
+            "Azele",
+            "local-playtest",
+            "Tell me where else this kind of loot drops around here so I can stack it up properly?",
+        )
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "i think its all in the tunnels. in the chest",
+                "metadata": {"event_type": "player_chat", "persona": "Azele", "map_id": 148, "map_name": "Ascalon City"},
+            }
+        )
+
+        good = "So the tunnel chests are where the good loot is. Got it."
+        self.assertEqual(validate_model_reply(good, event), good)
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("Alright, tunnels then. Keep it tight and do not let them wrap around us.", event)
+
     def test_gw1_resolver_understands_common_pre_searing_slang(self) -> None:
         cases = [
             ("what's the LDoA plan?", "Legendary Defender of Ascalon"),

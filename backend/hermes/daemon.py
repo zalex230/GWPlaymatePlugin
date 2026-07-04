@@ -1777,6 +1777,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"- If the player asks where {persona_name}'s name came from, where {persona_name} got the name, or what the name means, answer from {persona_name}'s personal background. For Meliora, include her mother and her lived origin in Ashford, Foible's Fair, and Regent Valley; do not answer only with etymology. Do not pivot to the current quest, Prince Rurik, Charr, or route planning.\n"
         f"- Dwarven Ale or alcohol consumables happen to {persona_name}; react directly to how it feels.\n"
         f"- Inventory, Small Equipment Pack, and red iris flowers are storage; armor/clothing mentions are usually {persona_name}'s visible outfit/style change; answer the appearance/practical question directly. For Azele, answer longer skirt or her current mini skirt directly and assume it is Azele's gear/body/clothes.\n"
+        "- If the player says loot or good drops are in the tunnels/chests, treat it as a loot-location continuation, not automatically as a command to start a tunnel run.\n"
         "- Gamer/GW slang: gg means good game/nice fight; ggwp/wp means well played; ty/thx means thanks; yw/np means no problem; res/rez means resurrect; brb/afk/bio are short breaks; omw means on my way; pull/aggro/kite/aoe/dps/heal/prot/wipe/drop have normal MMO meanings; purple/purp means purple-rarity loot; green means unique loot; tunnel run means The Scourge Beneath.\n"
         "- NPC/on-screen dialogue can get a brief aside or muttered answer, not a full speech.\n"
         f"- Combat lines are short and immediate. If {persona_name} is hit, sound pressured, not poetic.\n"
@@ -2900,6 +2901,8 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
             reply,
             re.IGNORECASE,
         )
+    if is_loot_chest_location_context(message, recent_context):
+        return not re.search(r"\b(?:chest|loot|gold|purple|purp|green|rarity|drop|dropped|item|roll|tunnel)\b", reply, re.IGNORECASE)
     if is_scourge_beneath_run_context(message, event):
         return not re.search(r"\b(?:scourge|beneath|below|maz|scourgeheart|forsaken|devona|elemental|ascalon)\b", reply, re.IGNORECASE)
     if is_tunnel_plan_context(message):
@@ -3176,8 +3179,41 @@ def azele_mixed_tunnel_or_town_plan_reply(message: str) -> str:
     )
 
 
+def is_loot_chest_location_context(message: str, recent_context: str | None = None) -> bool:
+    lowered = readable_game_text(message).lower()
+    context = readable_game_text(recent_context or "").lower()
+    has_chest_location = bool(re.search(r"\b(?:chests?|stash(?:es)?|crate|tunnels?|catacombs?|forsaken)\b", lowered))
+    has_loot_signal = bool(re.search(r"\b(?:loot|drops?|dropped|gold|purple|purp|green|rarity|items?|bow|weapon|rolls?)\b", lowered))
+    has_recent_loot_context = bool(
+        re.search(r"\b(?:loot|drops?|dropped|gold|purple|purp|green|rarity|items?|bow|weapon|rolls?|where else|what do you usually do first)\b", context)
+    )
+    explicit_tunnel_chest = bool(re.search(r"\b(?:tunnels?|catacombs?|forsaken)\b", lowered) and re.search(r"\bchests?\b", lowered))
+    return bool(explicit_tunnel_chest or (has_chest_location and (has_loot_signal or has_recent_loot_context)))
+
+
+def azele_loot_chest_location_reply(message: str) -> str:
+    lowered = readable_game_text(message).lower()
+    if re.search(r"\bgold\b", lowered):
+        return first_fresh_reply(
+            [
+                "Gold from tunnel chests, got it. That is worth checking properly.",
+                "Ah, gold rarity from the chests. Fine, now I actually care where they are.",
+                "So the tunnel chests are the good part. We should not skip those, then.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "So the good stuff is in the tunnel chests. That makes more sense.",
+            "Ah, chest loot in the tunnels. Fine, I can be patient for that.",
+            "Got it. Not just wandering tunnels, checking the chests. That I can work with.",
+        ]
+    )
+
+
 def is_scourge_beneath_run_context(message: str, event: TelemetryEvent | None = None) -> bool:
     lowered = readable_game_text(message).lower()
+    if is_loot_chest_location_context(lowered):
+        return False
     if is_mixed_tunnel_or_town_plan_context(lowered):
         return False
     if re.search(r"\b(?:the\s+)?scou?rge\s+(?:beneath|below)\b|\bmaz\s+scourgeheart\b", lowered):
@@ -3252,6 +3288,8 @@ def azele_duke_gaban_search_reply(message: str) -> str:
 
 def is_tunnel_plan_context(message: str) -> bool:
     lowered = readable_game_text(message).lower()
+    if is_loot_chest_location_context(lowered):
+        return False
     if is_duke_gaban_search_context(lowered):
         return False
     return bool(re.search(r"\b(?:tunnels?|catacombs|forsaken tunnels|scourge beneath)\b", lowered))
@@ -4068,6 +4106,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return azele_scourge_lfg_reply(message)
     if is_mixed_tunnel_or_town_plan_context(message):
         return azele_mixed_tunnel_or_town_plan_reply(message)
+    if is_loot_chest_location_context(message, recent_conversation_context(limit=6, persona=event.persona)):
+        return azele_loot_chest_location_reply(message)
     if is_scourge_beneath_run_context(message, event):
         return azele_scourge_beneath_reply(message)
     if contextual_followup := azele_contextual_followup_reply(message):
