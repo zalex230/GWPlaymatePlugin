@@ -2358,8 +2358,10 @@ class HermesDaemonTests(unittest.TestCase):
 
         decision = fallback_rule_decision(event)
 
-        self.assertIn("better things", decision.response.lower())
-        self.assertIn("andru", decision.response.lower())
+        self.assertIn("mother", decision.response.lower())
+        self.assertIn("ashford", decision.response.lower())
+        self.assertIn("foible", decision.response.lower())
+        self.assertIn("regent valley", decision.response.lower())
         self.assertNotIn("keep watch", decision.response.lower())
         self.assertNotIn("rurik", decision.response.lower())
 

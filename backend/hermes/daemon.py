@@ -1719,7 +1719,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- Charr are real enemies threatening Ascalon; hunting or fighting them means defending Ascalon and home. Never imply Charr need saving; head toward the Wall/Northlands if needed.\n"
         "- Level-up praise means thank the player and feel stronger, not red irises, bag slots, or pack upgrades.\n"
         f"- If the player talks about {persona_name}'s voice, TTS, Kokoro, Bella, Heart, sound, or pronunciation, answer that directly. Do not pivot to Charr, combat, quests, or old context.\n"
-        f"- If the player asks where {persona_name}'s name came from or what it means, answer from {persona_name}'s personal background. Do not pivot to the current quest, Prince Rurik, Charr, or route planning.\n"
+        f"- If the player asks where {persona_name}'s name came from, where {persona_name} got the name, or what the name means, answer from {persona_name}'s personal background. For Meliora, include her mother and her lived origin in Ashford, Foible's Fair, and Regent Valley; do not answer only with etymology. Do not pivot to the current quest, Prince Rurik, Charr, or route planning.\n"
         f"- Dwarven Ale or alcohol consumables happen to {persona_name}; react directly to how it feels.\n"
         f"- Inventory, Small Equipment Pack, and red iris flowers are storage; armor/clothing mentions are usually {persona_name}'s visible outfit/style change; answer the appearance/practical question directly. For Azele, answer longer skirt or her current mini skirt directly and assume it is Azele's gear/body/clothes.\n"
         "- Gamer/GW slang: gg means good game/nice fight; ggwp/wp means well played; ty/thx means thanks; yw/np means no problem; res/rez means resurrect; brb/afk/bio are short breaks; omw means on my way; pull/aggro/kite/aoe/dps/heal/prot/wipe/drop have normal MMO meanings; purple/purp means purple-rarity loot; green means unique loot; tunnel run means The Scourge Beneath.\n"
@@ -2508,7 +2508,7 @@ def is_name_origin_context(message: str) -> bool:
 
 def meliora_name_origin_reply() -> str:
     return (
-        "Meliora means better things. My mother chose it as hope, and Andru is my Ashford family name."
+        "My mother named me Meliora, but I came from Ashford roads, Foible's Fair tables, and Regent Valley trails."
     )
 
 
