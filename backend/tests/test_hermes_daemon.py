@@ -1809,6 +1809,60 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(len(prompts), 2)
         self.assertIn("bad shape model reply", prompts[1])
 
+    def test_character_reply_salvages_overlong_charr_reply_when_retry_fails(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "we never get tired of hunting charr, now do we?",
+                "metadata": {
+                    "event_type": "player_chat",
+                    "persona": "Meliora Andru",
+                    "map_name": "Lakeside County",
+                },
+            }
+        )
+        prompts: list[str] = []
+        responses = iter(
+            [
+                (
+                    "Yeah. Every time they charge at us in front of Ascalon, that anger burns hotter. "
+                    "We hunt them because they threaten farms, roads, and everyone behind the Wall. "
+                    "Harlan would tell me to keep my head clear, but he never said I had to stop caring. "
+                    "So no, I do not get tired of it. I just get quieter until the next shot matters. "
+                    "If they keep crossing into our fields, I will keep drawing the bow until my fingers ache."
+                ),
+                (
+                    "No. Charr threaten Ascalon, and I will keep hunting them as long as they keep coming. "
+                    "That is not a hobby, it is home. We can take the road north, watch the grass for tracks, "
+                    "keep the wind in our face, and make them regret crossing the Wall. "
+                    "If they show their teeth near the farms, I want space, a clear shot, and you close enough to hear me. "
+                    "Then we pull them apart, keep them away from the road, and make sure no merchant or farmer pays for our hesitation."
+                ),
+            ]
+        )
+        original_generate = hermes_daemon.ollama_generate_visible
+        try:
+            def fake_generate(
+                prompt: str,
+                *,
+                timeout_seconds: float | None = None,
+                num_predict: int | None = None,
+            ) -> str:
+                prompts.append(prompt)
+                return next(responses)
+
+            hermes_daemon.ollama_generate_visible = fake_generate
+            decision = hermes_daemon.character_reply_with_ollama(event, timeout_seconds=1.0, num_predict=160, record_id=2804)
+        finally:
+            hermes_daemon.ollama_generate_visible = original_generate
+
+        self.assertNotIn("Say the word and I’ll keep watch", decision.response)
+        self.assertRegex(decision.response.lower(), r"charr|ascalon|wall|hunt|threaten")
+        self.assertLessEqual(len(hermes_daemon.split_gw_chat_lines(decision.response)), 4)
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("overlong model reply", prompts[1])
+
     def test_flirty_player_chat_prompt_prioritizes_social_intent(self) -> None:
         prompt = build_character_reply_prompt(
             event_from_game_log(

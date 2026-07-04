@@ -3710,6 +3710,42 @@ def salvage_complete_model_reply(reply: str, event: TelemetryEvent) -> str | Non
     return best_valid
 
 
+def salvage_overlong_model_reply(reply: str, event: TelemetryEvent) -> str | None:
+    cleaned = repair_model_reply(reply)
+    if not cleaned:
+        return None
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", cleaned) if part.strip()]
+    if not sentences:
+        return None
+
+    best_valid: str | None = None
+    prefix: list[str] = []
+    for sentence in sentences:
+        prefix.append(sentence)
+        candidate = " ".join(prefix).strip()
+        if candidate == cleaned:
+            break
+        try:
+            best_valid = validate_model_reply(candidate, event)
+        except Exception:
+            continue
+
+    if best_valid:
+        return best_valid
+
+    lines = split_gw_chat_lines(cleaned)
+    for line_count in range(min(3, len(lines)), 0, -1):
+        candidate = " ".join(lines[:line_count]).strip()
+        sentence_cut = max(candidate.rfind("."), candidate.rfind("!"), candidate.rfind("?"))
+        if sentence_cut >= 6:
+            candidate = candidate[: sentence_cut + 1].strip()
+        try:
+            return validate_model_reply(candidate, event)
+        except Exception:
+            continue
+    return None
+
+
 def repair_model_reply(reply: str) -> str:
     cleaned = re.sub(r"\s+", " ", reply or "").strip()
     cleaned = re.sub(r"\bWhat['’]?ve\s+got\b", "What's got", cleaned, flags=re.IGNORECASE)
@@ -3780,7 +3816,11 @@ def character_reply_with_ollama(
                     flush=True,
                 )
 
-            salvage = salvage_complete_model_reply(cleaned, event)
+            salvage = (
+                salvage_overlong_model_reply(cleaned, event)
+                if str(exc) == "overlong model reply" or str(retry_exc or "") == "overlong model reply"
+                else salvage_complete_model_reply(cleaned, event)
+            )
             if salvage:
                 print(
                     f"Ollama character reply salvaged complete prefix after retry failure "
