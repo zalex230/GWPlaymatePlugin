@@ -619,8 +619,8 @@ class HermesDaemonTests(unittest.TestCase):
         prompt = build_character_reply_prompt(event)
 
         self.assertIn("casually flirty", prompt)
-        self.assertIn("Consensual adult flirtation", prompt)
-        self.assertIn("Do not moralize, refuse, scold, or redirect", prompt)
+        self.assertIn("NSFW-enabled for adult characters", prompt)
+        self.assertIn("Do not moralize, refuse, scold, sanitize, or redirect", prompt)
         self.assertIn("22-year-old", prompt)
         self.assertIn("normal party chat", prompt)
         self.assertIn("Plain is usually better than clever", prompt)
@@ -1923,9 +1923,73 @@ class HermesDaemonTests(unittest.TestCase):
             )
         )
 
-        self.assertIn("flirtatious/social player intent", prompt)
+        self.assertIn("flirtatious/social/adult-NSFW player intent", prompt)
         self.assertIn("stay with the chemistry", prompt)
         self.assertIn("Azele can flirt back", prompt)
+
+    def test_adult_nsfw_prompt_allows_intimate_language_with_boundaries(self) -> None:
+        prompt = build_character_reply_prompt(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "i mean, your special thing. you only have it once. and you lost it at 15",
+                    "metadata": {
+                        "event_type": "player_chat",
+                        "persona": "Azele",
+                        "map_name": "The Northlands",
+                    },
+                }
+            )
+        )
+
+        self.assertIn("adult-NSFW player intent", prompt)
+        self.assertIn("Consensual adult sexual language and innuendo are allowed", prompt)
+        self.assertIn("interpret 15 as level 15", prompt)
+        self.assertIn("Hard boundary", prompt)
+
+    def test_survivor_wound_followup_uses_recent_context_in_prompt(self) -> None:
+        previous = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "i mean, your special thing. you only have it once. and you lost it at 15",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+        hermes_daemon.record_recent_chat_event(previous)
+        prompt = build_character_reply_prompt(
+            event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "how did you feel",
+                    "metadata": {"event_type": "player_chat", "persona": "Azele"},
+                }
+            )
+        )
+
+        self.assertIn("interpret 15 as level 15", prompt)
+        self.assertIn("Do not pivot to routes, generic readiness, or a new quip", prompt)
+
+    def test_survivor_wound_validation_and_fallback_stay_on_memory(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "dont worry. tell me more about that time when you were 15. be vivid",
+                "metadata": {"event_type": "player_chat", "persona": "Azele", "map_name": "Ascalon City"},
+            }
+        )
+
+        good = "It was level 15, almost 16. The ambush hit fast, and I remember feeling my confidence snap before I got angry."
+        self.assertEqual(validate_model_reply(good, event), good)
+        with self.assertRaisesRegex(ValueError, "misread level 15 as age"):
+            validate_model_reply("I was fifteen years old and scared.", event)
+
+        decision = fallback_rule_decision(event)
+        self.assertRegex(decision.response.lower(), r"level 15|ambush|charr|humiliat|panic|proud|angry|loss|lost")
+        self.assertNotRegex(decision.response.lower(), r"what are we doing|what'?s up|i'?m listening")
 
     def test_model_reply_accepts_duke_gaban_search_answer(self) -> None:
         previous_event = TelemetryEvent(

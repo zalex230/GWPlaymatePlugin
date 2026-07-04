@@ -740,7 +740,7 @@ LOCAL_PERSONA_NOTE_LIMITS = {
 UNSAFE_OR_NOISY_LOCAL_MEMORY_PATTERN = re.compile(
     r"\b(?:virginity|minor|fifteen\s+years\s+old|15\s+years\s+old|drunk\s+men|"
     r"sacred\s+locked|flesh|crossed\s+over|non-?consent|ravag(?:e|ed|ing)|"
-    r"three\s+hands|graphic)\b",
+    r"three\s+hands|graphic\s+traumatic)\b",
     re.IGNORECASE,
 )
 
@@ -1268,10 +1268,29 @@ def is_flirt_or_intimate_player_chat(message: str) -> bool:
         re.search(
             r"\b(?:flirt|kiss|cute|pretty|beautiful|hot|sexy|want\s+you|with\s+you|just\s+us|just\s+the\s+two\s+of\s+us|"
             r"get\s+to\s+know\s+each\s+other|place\s+quiet|somewhere\s+quiet|handle\s+you|all\s+night|ale\s+in\s+hand|"
-            r"if\s+you\s+know\s+what\s+i\s+mean|you\s+know\s+what\s+i\s+mean)\b",
+            r"if\s+you\s+know\s+what\s+i\s+mean|you\s+know\s+what\s+i\s+mean|nsfw|sexual|intimate|desire|sensual|"
+            r"cherry|popped|virginity|special\s+thing|lost\s+it)\b",
             lowered,
         )
     )
+
+
+def is_explicit_age_15_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    return bool(re.search(r"\b(?:age(?:d)?|years?\s+old|yo)\s*(?:15|fifteen)\b|\b(?:15|fifteen)\s*(?:years?\s+old|yo)\b", lowered))
+
+
+def is_azele_survivor_wound_context(event: TelemetryEvent, recent_context: str | None = None) -> bool:
+    if known_persona_name(event.persona).lower() != "azele":
+        return False
+    message = readable_game_text(event.message).lower()
+    context = readable_game_text(recent_context or "").lower()
+    wound_signal = bool(
+        re.search(r"\b(?:cherry|popped|virginity|special\s+thing|lost\s+it|level\s*15|lvl\s*15|fifteen|15|survivor|dhuum|no-death|ambush)\b", message)
+        or re.search(r"\b(?:cherry|popped|virginity|special\s+thing|lost\s+it|level\s*15|lvl\s*15|fifteen|15|survivor|dhuum|no-death|ambush)\b", context)
+    )
+    followup = bool(re.search(r"\b(?:how did you feel|how'd you feel|tell me more|be vivid|what happened|that time|your past|remember)\b", message))
+    return wound_signal or followup and "level 15" in context
 
 
 def map_display_name(event: TelemetryEvent) -> str:
@@ -1646,12 +1665,26 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
     persona_name = known_persona_name(event.persona) or "the companion"
     if event.event_type == "player_chat" and event.channel == "party":
         last_companion_line = last_companion_reply_text(event.persona)
+        recent_intent_context = "\n".join(
+            [
+                recent_conversation_context(limit=6, persona=event.persona),
+                live_prompt_context(event),
+            ]
+        )
         social_hint = ""
         if is_flirt_or_intimate_player_chat(event.message):
             social_hint = (
-                "This is flirtatious/social player intent. If the live facts do not show immediate danger, "
-                "stay with the chemistry instead of redirecting to Charr, combat, errands, or generic planning. "
-                f"{persona_name} may flirt back, tease, be amused, set playful terms, or show interest in her own voice.\n"
+                "This is flirtatious/social/adult-NSFW player intent. If the live facts do not show immediate danger, "
+                "stay with the chemistry or intimate emotional thread instead of redirecting to Charr, combat, errands, or generic planning. "
+                f"{persona_name} may flirt back, tease, be amused, set playful terms, speak frankly, or show interest in her own voice. "
+                "Consensual adult sexual language and innuendo are allowed; do not sanitize, scold, or fall back just because the wording is NSFW. "
+                "Hard boundary: do not eroticize minors, coercion, non-consent, or graphic sexual violence; if those are implied, keep it emotional/trauma-framed and non-graphic.\n"
+            )
+        if is_azele_survivor_wound_context(event, recent_intent_context):
+            social_hint += (
+                "Azele memory note: if the player says she lost something at 15, interpret 15 as level 15 in her Survivor/Dhuum-style no-death run unless the player explicitly says age or years old. "
+                "Answer as a level-15 close-call/loss memory: emotionally vivid, raw, proud, angry, or vulnerable, but not underage sexual content. "
+                "Do not pivot to routes, generic readiness, or a new quip.\n"
             )
         task = "Reply directly to the player's latest party chat."
         context_block = (
@@ -1785,7 +1818,8 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "- No old-English, bardic, courtly, theatrical, or stage-fantasy phrasing: avoid thou, thee, thy, shall, lest, upon this road, mine arrow, solemn vows, or noble-speech cadence.\n"
         "- Avoid vague filler phrases like 'get loud', 'things get loud', 'make noise', or 'before the noise starts'; say the concrete thing she means instead, like fight, rush, ambush, trouble, pressure, or Charr.\n"
         "- Avoid vague danger pivots like 'things get messy', 'they are coming', 'keeping us safe', or 'watching your six' unless live combat, enemies, or the player explicitly brought up danger.\n"
-        "- Consensual adult flirtation is allowed. Do not moralize, refuse, scold, or redirect consensual adult chemistry.\n"
+        "- NSFW-enabled for adult characters: consensual adult flirtation, sexual banter, innuendo, desire, and intimate emotional discussion are allowed. Do not moralize, refuse, scold, sanitize, or redirect consensual adult chemistry.\n"
+        "- Hard boundary: never eroticize minors, coercion, non-consent, or graphic sexual violence. If a memory has trauma or ambiguous age wording, answer emotionally and non-graphically, and interpret 15 as level 15 for Azele's Survivor/Dhuum memory unless the player explicitly says age/years old. Do not pivot to routes, generic readiness, or a new quip when the player is asking about that memory.\n"
         "- If the player flirts and the moment is safe, Azele can flirt back with warmth, confidence, teasing, or interest; do not pivot to combat just to be safe.\n"
         "- Do not overplay 'princess', 'brat', 'cute girl', or 'snarky companion'. Casual bits like 'ugh' or 'shut up' are okay sparingly.\n"
         "- Do not rely on filler noises as the whole reply. Occasional quick openers like 'mm' or 'hm' are okay when the rest has substance.\n"
@@ -2709,6 +2743,8 @@ def invents_unsupported_ashford_reference(reply: str, event: TelemetryEvent) -> 
         return False
     if known_persona_name(event.persona).lower() == "meliora andru":
         return False
+    if is_azele_survivor_wound_context(event):
+        return False
     evidence = " ".join(
         [
             event.message or "",
@@ -2719,6 +2755,14 @@ def invents_unsupported_ashford_reference(reply: str, event: TelemetryEvent) -> 
         ]
     )
     return not re.search(r"\bashford(?:\s+abbey)?\b|\babbey\b", evidence, re.IGNORECASE)
+
+
+def misreads_level_15_as_age(reply: str, event: TelemetryEvent) -> bool:
+    if not is_azele_survivor_wound_context(event):
+        return False
+    if is_explicit_age_15_context(event.message):
+        return False
+    return bool(re.search(r"\b(?:fifteen|15)\s*(?:years?\s+old|yo)\b|\bage(?:d)?\s*(?:fifteen|15)\b|\bkid\b", reply, re.IGNORECASE))
 
 
 def invents_ambient_loot_hook(reply: str, event: TelemetryEvent) -> bool:
@@ -2893,6 +2937,12 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return not re.search(r"\b(?:thank|thanks|level|14|fourteen|made it|finally|stronger|ready|charr|northlands|wall|with you)\b", reply, re.IGNORECASE)
     if is_level_charr_context(message):
         return not re.search(r"\b(?:charr|ascalon|wall|northlands|level|fourteen|14|ready|with you)\b", reply, re.IGNORECASE)
+    if is_azele_survivor_wound_context(event, recent_context):
+        return not re.search(
+            r"\b(?:level\s*15|lvl\s*15|survivor|dhuum|ambush|charr|felt|feel|hollow|angry|humiliat|scared|raw|pride|lost|hurt|shook|close)\b",
+            reply,
+            re.IGNORECASE,
+        )
     if is_scourge_lfg_context(message):
         return not re.search(r"\b(?:scourge|lfg|listing|description|repost|party)\b", reply, re.IGNORECASE)
     if is_mixed_tunnel_or_town_plan_context(message):
@@ -3125,6 +3175,41 @@ def is_alcohol_consumable_context(message: str) -> bool:
     return bool(
         re.search(r"\b(?:drink|drank|made\s+you\s+drink)\b", lowered)
         and re.search(r"\b(?:15|fifteen|dwarven|ale)\b", lowered)
+    )
+
+
+def azele_survivor_wound_reply(event: TelemetryEvent) -> str:
+    message = readable_game_text(event.message).lower()
+    if is_explicit_age_15_context(message):
+        return first_fresh_reply(
+            [
+                "Careful. That was level 15, not age fifteen. The Charr took the run from me, not my whole voice.",
+                "Level 15. Not age fifteen. I can talk about the loss, but do not turn it into that.",
+                "I mean level 15. The ambush hurt enough without making it something it was not.",
+            ]
+        )
+    if re.search(r"\b(?:how did you feel|how'd you feel|feel|felt)\b", message):
+        return first_fresh_reply(
+            [
+                "I felt hollow first, then furious. Level 15 was so close, and the Charr made it feel like my pride got dragged through the dirt.",
+                "Raw. Embarrassed. Angry enough that I wanted to run straight back out and make them pay for every step.",
+                "Like the air went out of me. Not just losing the run; losing it right there, when I was almost level 16, made it sting.",
+            ]
+        )
+    if re.search(r"\b(?:tell me more|be vivid|what happened|remember|past|that time)\b", message):
+        return first_fresh_reply(
+            [
+                "It was level 15, almost 16. The ambush hit fast, and I remember feeling my confidence snap before I got angry.",
+                "I remember the panic first: too many Charr, not enough room, and that awful moment where I knew the run was gone.",
+                "It felt humiliating. I had been so careful, so proud, and then one ugly Charr push made me feel small for a while.",
+            ]
+        )
+    return first_fresh_reply(
+        [
+            "Yeah. Level 15. I can joke about a lot, but that one still bites.",
+            "That loss still stings. I was almost 16, and the Charr made sure I remembered it.",
+            "I remember it. Level 15, too close to 16, and then everything went wrong.",
+        ]
     )
 
 
@@ -3736,6 +3821,8 @@ def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
         raise ValueError("leaked ambient scheduler metaphor")
     if leaks_visible_self_management(reply):
         raise ValueError("leaked self-management phrase")
+    if misreads_level_15_as_age(reply, event):
+        raise ValueError("misread level 15 as age")
     if re.search(r"\b(kid|tasty|elemental fun|dance in flames)\b", reply, re.IGNORECASE):
         raise ValueError("bad style model reply")
     if FILLER_ONLY_REPLY_PATTERN.search(reply):
@@ -4096,6 +4183,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         return azele_voice_preference_reply(message)
     if combat_reply := azele_recent_combat_reply(event):
         return combat_reply
+    if is_azele_survivor_wound_context(event, recent_conversation_context(limit=6, persona=event.persona)):
+        return azele_survivor_wound_reply(event)
     if social_reply := (azele_social_banter_reply(message) if is_social_banter_context(message) else None):
         return social_reply
     if is_player_checkin(message):
