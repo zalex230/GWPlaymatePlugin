@@ -731,6 +731,19 @@ PROMPT_MEMORY_TYPES = {
     "quest_progress",
 }
 
+LOCAL_PERSONA_NOTE_LIMITS = {
+    ".md": 4200,
+    ".lore.md": 7200,
+    ".memory.md": 4200,
+}
+
+UNSAFE_OR_NOISY_LOCAL_MEMORY_PATTERN = re.compile(
+    r"\b(?:virginity|minor|fifteen\s+years\s+old|15\s+years\s+old|drunk\s+men|"
+    r"sacred\s+locked|flesh|crossed\s+over|non-?consent|ravag(?:e|ed|ing)|"
+    r"three\s+hands|graphic)\b",
+    re.IGNORECASE,
+)
+
 
 def fetch_recent_memories(character_name: str, *, limit: int = 12) -> list[MemoryRow]:
     if not _supabase_configured() or not character_name.strip():
@@ -757,6 +770,23 @@ def sanitize_memory_for_prompt(text: str) -> str:
     cleaned = re.sub(r"\bmaps?\s+\d+(?:\s*,\s*\d+)*\b", "areas", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bmap_id\s*[=:]\s*\d+\b", "map unknown", cleaned, flags=re.IGNORECASE)
     return cleaned
+
+
+def sanitize_local_persona_notes_for_prompt(text: str, *, max_chars: int) -> str:
+    cleaned_lines: list[str] = []
+    for raw_line in str(text or "").splitlines():
+        line = sanitize_memory_for_prompt(raw_line).strip()
+        if not line:
+            if cleaned_lines and cleaned_lines[-1]:
+                cleaned_lines.append("")
+            continue
+        if UNSAFE_OR_NOISY_LOCAL_MEMORY_PATTERN.search(line):
+            continue
+        if len(line) > 900 and not line.startswith("#"):
+            continue
+        cleaned_lines.append(line)
+    cleaned = "\n".join(cleaned_lines).strip()
+    return clamp_prompt_section(cleaned, max_chars=max_chars) if cleaned else ""
 
 
 def sanitize_prompt_context(text: str) -> str:
@@ -1070,8 +1100,8 @@ def persona_living_notes(persona: str) -> str:
     sections: list[str] = []
     for path, heading in (
         (PERSONA_MEMORY_DIR / f"{slug}.md", "Living character notes"),
-        (PERSONA_MEMORY_DIR / f"{slug}.lore.md", "World memory notes"),
         (PERSONA_MEMORY_DIR / f"{slug}.memory.md", "Personal memory notes"),
+        (PERSONA_MEMORY_DIR / f"{slug}.lore.md", "World memory notes"),
     ):
         try:
             notes = path.read_text(encoding="utf-8").strip()
@@ -1079,11 +1109,20 @@ def persona_living_notes(persona: str) -> str:
             continue
         except OSError:
             continue
+        limit = LOCAL_PERSONA_NOTE_LIMITS.get("".join(path.suffixes[-2:]), LOCAL_PERSONA_NOTE_LIMITS.get(path.suffix, 4200))
+        notes = sanitize_local_persona_notes_for_prompt(notes, max_chars=limit)
         if notes:
             sections.append(f"{heading}:\n{notes}")
     if not sections:
         return ""
     return "\n\n" + "\n\n".join(sections)
+
+
+def compact_local_persona_memory_context(persona: str) -> str:
+    notes = persona_living_notes(persona)
+    if not notes:
+        return "None"
+    return clamp_prompt_section(notes, max_chars=3600)
 
 
 def persona_slug(persona: str) -> str:
@@ -1716,6 +1755,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"Recent conversation transcript:\n{clamp_prompt_section(recent_conversation_context(limit=6, persona=event.persona), max_chars=1200, from_end=True)}\n\n"
         f"Recent {persona_name} replies:\n{clamp_prompt_section(recent_companion_context(persona=event.persona), max_chars=700)}\n\n"
         f"Recent live context:\n{clamp_prompt_section(live_prompt_context(event), max_chars=900)}\n"
+        f"Local persona memory:\n{compact_local_persona_memory_context(event.persona)}\n\n"
         f"Relevant memories:\n{compact_relevant_memory_context(event.persona)}\n\n"
         f"GW Wiki background for player question:\n{clamp_prompt_section(gw_wiki_context(event), max_chars=1400)}\n\n"
         "Rules:\n"

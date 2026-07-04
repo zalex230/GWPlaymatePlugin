@@ -47,6 +47,7 @@ from backend.hermes_daemon.daemon import (
     recent_reply_texts,
     repair_model_reply,
     reply_expression,
+    sanitize_local_persona_notes_for_prompt,
     sanitize_memory_for_prompt,
     should_flush_memory_buffer,
     should_use_direct_character_reply,
@@ -3161,6 +3162,56 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertIn("World memory notes", notes)
         self.assertIn("local lore that should not need to be committed", notes)
+
+    def test_local_persona_notes_filter_unsafe_or_noisy_legacy_lines(self) -> None:
+        notes = sanitize_local_persona_notes_for_prompt(
+            "# Local notes\n\n"
+            "- Azele grew up around Ascalon City and remembers ordinary training nerves.\n"
+            "- A malformed old line says fifteen years old and contains graphic traumatic wording.\n",
+            max_chars=500,
+        )
+
+        self.assertIn("ordinary training nerves", notes)
+        self.assertNotIn("fifteen years old", notes)
+        self.assertNotIn("graphic traumatic wording", notes)
+
+    def test_azele_backstory_prompt_prioritizes_lived_memory(self) -> None:
+        base = hermes_daemon.PERSONA_MEMORY_DIR / "prompt-memory-persona"
+        paths = [
+            base.with_suffix(".md"),
+            hermes_daemon.PERSONA_MEMORY_DIR / "prompt-memory-persona.memory.md",
+        ]
+        try:
+            paths[0].write_text(
+                "- Prompt Memory Persona grew up around Ascalon City and remembers ordinary training nerves.\n",
+                encoding="utf-8",
+            )
+            paths[1].write_text(
+                "- Prompt Memory Persona lost a serious Survivor run at level 15 and still feels raw about Charr ambushes.\n"
+                "- A malformed old line says fifteen years old and contains graphic traumatic wording.\n",
+                encoding="utf-8",
+            )
+            event = event_from_game_log(
+                {
+                    "sender": "Player",
+                    "channel": "party",
+                    "message": "do you remember anything from your past?",
+                    "metadata": {"event_type": "player_chat", "persona": "Prompt Memory Persona"},
+                }
+            )
+
+            prompt = build_character_reply_prompt(event)
+        finally:
+            for path in paths:
+                path.unlink(missing_ok=True)
+
+        self.assertIn("answer with lived personal history first", prompt)
+        self.assertIn("Living character notes", prompt)
+        self.assertIn("Personal memory notes", prompt)
+        self.assertIn("ordinary training nerves", prompt)
+        self.assertIn("lost a serious Survivor run", prompt)
+        self.assertNotIn("fifteen years old", prompt.lower())
+        self.assertNotIn("graphic traumatic wording", prompt.lower())
 
     def test_prompt_memory_filter_skips_noisy_legacy_session_summaries(self) -> None:
         memories = [
