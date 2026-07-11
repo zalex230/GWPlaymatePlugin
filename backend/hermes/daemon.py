@@ -2037,6 +2037,11 @@ def build_decision_prompt(event: TelemetryEvent) -> str:
 
 def build_player_intent_retry_prompt(event: TelemetryEvent, rejected_reply: str, reason: str) -> str:
     persona_name = known_persona_name(event.persona) or "the companion"
+    concise_instruction = (
+        "- This is an elaboration/backstory request: answer with 2 to 4 complete sentences, then stop.\n"
+        if is_elaboration_request_context(event.message)
+        else "- Keep it to 1 or 2 complete sentences, then stop.\n"
+    )
     return (
         build_character_reply_prompt(event)
         + "\n\n"
@@ -2044,7 +2049,8 @@ def build_player_intent_retry_prompt(event: TelemetryEvent, rejected_reply: str,
         f"- The previous draft was rejected because it {reason}.\n"
         f"- Rejected draft: {rejected_reply!r}\n"
         "- Replace it with one complete, natural reply to the player's actual latest message or current event.\n"
-        "- Anchor on the nouns, pronouns, question, joke, correction, or plan in the latest player message and recent transcript.\n"
+        + concise_instruction
+        + "- Anchor on the nouns, pronouns, question, joke, correction, or plan in the latest player message and recent transcript.\n"
         "- Finish the thought cleanly. Do not stop on dangling words like 'so we', 'because', 'and', or 'then'.\n"
         "- Do not answer a different topic. Do not use a generic check-in. Do not repeat the rejected draft.\n"
         f"Return only {persona_name}'s corrected reply."
@@ -2080,14 +2086,18 @@ def clean_model_reply(text: str) -> str:
 
 MODEL_INSTRUCTION_ECHO_REPLY_PATTERN = re.compile(
     r"^\s*(?:"
+    r"thinking\s+process\b|"
     r"do\s*(?:\.|$)|"
     r"return\s*(?:\.|$)|"
     r"write\s*(?:\.|$)|"
+    r"line\s+under\s+\d+\s+characters?\s+each\b|"
     r"(?:one|two|three|one\s+or\s+two|one\s+to\s+three|1\s*(?:-|to)\s*3)\s+"
     r"(?:natural\s+)?(?:party[- ]chat\s+)?lines?\b.*\b(?:under|characters?|chars?|each|reply|response)\b|"
     r"(?:one|two|three|one\s+or\s+two|one\s+to\s+three|1\s*(?:-|to)\s*3)\s+"
     r"(?:short\s+)?(?:reply|response|message)s?\b.*\b(?:under|characters?|chars?|each|line)\b|"
     r"do not include\b.*\b(?:system|meta|commentary|reply|preamble|postscript|label|stage direction|explanation|response)\b|"
+    r"return\s+in\s+json\s+format\b.*\b(?:list|strings?|chat|ambient|combat)\b|"
+    r"json\s+list\b.*\b(?:strings?|chat|ambient|combat)\b|"
     r"return only\b.*\b(?:reply|line|message|response|persona)\b|"
     r"write (?:one|a)\b.*\b(?:reply|line|message|response)\b"
     r")",
@@ -2974,7 +2984,8 @@ def invents_unsupported_rumor(reply: str, event: TelemetryEvent) -> bool:
 def invents_unsupported_ashford_reference(reply: str, event: TelemetryEvent) -> bool:
     if not re.search(r"\bashford(?:\s+abbey)?\b|\babbey\b", reply, re.IGNORECASE):
         return False
-    if known_persona_name(event.persona).lower() == "meliora andru":
+    persona = known_persona_name(event.persona).lower()
+    if persona in {"meliora andru", "azwar"}:
         return False
     if is_azele_survivor_wound_context(event):
         return False
@@ -3222,9 +3233,21 @@ def reply_too_long_for_context(reply: str, event: TelemetryEvent) -> bool:
     message = readable_game_text(event.message)
     if is_voice_preference_context(message):
         return line_count > 2
-    if re.search(r"\b(?:tell me more|explain|elaborate|story|backstory|past|why|what happened|how did)\b", message, re.IGNORECASE):
-        return False
+    if is_elaboration_request_context(message):
+        return line_count > 6
     return line_count > 4
+
+
+def is_elaboration_request_context(message: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:tell me more|explain|elaborate|stor(?:y|ies)|backstory|past|why|what happened|how did|"
+            r"tell me about (?:yourself|you|your past|where you came from)|who are you|where did you come from|"
+            r"what are you like|your history|your life)\b",
+            readable_game_text(message),
+            re.IGNORECASE,
+        )
+    )
 
 
 CHARR_MENTION_PATTERN = re.compile(r"\bcha?rr?\b", re.IGNORECASE)
@@ -4194,7 +4217,7 @@ def salvage_direct_player_chat_reply(reply: str, event: TelemetryEvent) -> str |
         return None
     if not re.search(r"[.!?)]$", cleaned):
         cleaned = f"{cleaned}."
-    max_lines = 6 if re.search(r"\b(?:tell me more|explain|elaborate|story|backstory|past|perspective|what happened|how did|be vivid)\b", event.message, re.IGNORECASE) else 4
+    max_lines = 6 if is_elaboration_request_context(event.message) else 4
     lines = split_gw_chat_lines(cleaned, max_lines=max_lines)
     if not lines or any(DANGLING_REPLY_ENDING_PATTERN.search(line.rstrip(" .!?")) for line in lines):
         return None
@@ -4255,7 +4278,8 @@ def character_reply_with_ollama(
             retry_started_at = time.perf_counter()
             retry_prompt = build_player_intent_retry_prompt(event, cleaned, str(exc))
             try:
-                retry_response = ollama_generate_visible(retry_prompt, timeout_seconds=timeout_seconds, num_predict=num_predict)
+                retry_num_predict = min(num_predict or settings.hermes_player_chat_ollama_num_predict, 110) if str(exc) == "overlong model reply" else num_predict
+                retry_response = ollama_generate_visible(retry_prompt, timeout_seconds=timeout_seconds, num_predict=retry_num_predict)
                 retry_elapsed = time.perf_counter() - retry_started_at
                 retry_cleaned = clean_model_reply(retry_response)
                 retry_reply = validate_model_reply(retry_cleaned, event)

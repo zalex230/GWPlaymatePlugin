@@ -190,6 +190,9 @@ class HermesDaemonTests(unittest.TestCase):
             "Do not include any system text or meta commentary.",
             "Do not include any meta text like \"Here is your response:",
             "One or two natural party-chat lines, under 120 characters each.",
+            "Thinking Process: 1. Analyze the Request: Persona: Azwar.",
+            "Return in JSON format as a list of strings containing one line for chat and one short combat/ambient",
+            "line under 119 characters each.",
         ):
             with self.subTest(reply=reply):
                 with self.assertRaises(ValueError):
@@ -1586,6 +1589,42 @@ class HermesDaemonTests(unittest.TestCase):
                 "You okay now or do you need help moving back toward Ashford while it settles here?",
                 event,
             )
+
+    def test_azwar_allows_ashford_backstory_when_player_asks(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "tell me about your past",
+                "map_id": 146,
+                "map_name": "Lakeside County",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar", "map_name": "Lakeside County"},
+            }
+        )
+
+        self.assertEqual(
+            validate_model_reply("My father ran a forge near Ashford, and Sir Garran taught me how steel holds together.", event),
+            "My father ran a forge near Ashford, and Sir Garran taught me how steel holds together.",
+        )
+
+    def test_azwar_allows_generous_self_introduction(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "are you? tell me about yourself",
+                "map_id": 146,
+                "map_name": "Lakeside County",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar", "map_name": "Lakeside County"},
+            }
+        )
+        reply = (
+            "I'm from Ashford. My father ran a forge, and Sir Garran taught me how steel holds together. "
+            "I learned sword and shield because someone has to stand in front when trouble comes. "
+            "That is the short version; the longer one has more bruises."
+        )
+
+        self.assertEqual(validate_model_reply(reply, event), reply)
 
     def test_azele_allows_grounded_ashford_reference(self) -> None:
         map_event = event_from_game_log(
