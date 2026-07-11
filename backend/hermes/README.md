@@ -35,7 +35,7 @@ Useful environment variables live in `backend/.env`:
 - `SUPABASE_SERVICE_KEY`
 - `HERMES_USE_OLLAMA`
 - `OLLAMA_HOST`
-- `OLLAMA_MODEL` (default: `hermes-qwen35-4b:latest`; keep Hermes on the fast quantized Qwen model)
+- `OLLAMA_MODEL` (default: `hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M`; keep Hermes on the fast quantized uncensored Qwen 3.5 4B model)
 - `OLLAMA_NUM_CTX`
 - `OLLAMA_NUM_PREDICT`
 - `HERMES_PLAYER_CHAT_OLLAMA_NUM_PREDICT` (default: `160`; lets direct conversation finish multi-message replies without affecting terse ambient/combat generations)

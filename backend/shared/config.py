@@ -56,7 +56,7 @@ class BackendSettings:
     hermes_poll_batch_size: int = _int_env("HERMES_POLL_BATCH_SIZE", 50)
     hermes_poll_state_path: str = os.getenv("HERMES_POLL_STATE_PATH", "")
     ollama_host: str = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-    ollama_model: str = os.getenv("OLLAMA_MODEL", "hermes-qwen35-4b:latest")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M")
     ollama_num_ctx: int = _int_env("OLLAMA_NUM_CTX", 8192)
     ollama_num_predict: int = _int_env("OLLAMA_NUM_PREDICT", 40)
     ollama_timeout_seconds: float = _float_env("OLLAMA_TIMEOUT_SECONDS", 120.0)

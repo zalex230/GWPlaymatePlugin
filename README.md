@@ -136,8 +136,9 @@ For the most conservative free-tier Supabase use, leave `HERMES_ENABLE_REALTIME=
 poll with stored watermarks. If you enable Realtime, keep `HERMES_REALTIME_CONNECTION_BUDGET=150` so
 Hermes plans for one Realtime connection while preserving a 50-connection buffer under Supabase's
 200-connection free-tier limit. For the first plumbing test, leave `HERMES_USE_OLLAMA=false`. Once the
-closed loop works, set `HERMES_USE_OLLAMA=true` and keep `OLLAMA_MODEL=hermes-qwen35-4b:latest` so
-Hermes uses the fast quantized Qwen model.
+closed loop works, set `HERMES_USE_OLLAMA=true` and keep
+`OLLAMA_MODEL=hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M` so Hermes uses the
+fast quantized uncensored Qwen 3.5 4B model.
 
 Optional Kokoro TTS audio needs three pieces:
 

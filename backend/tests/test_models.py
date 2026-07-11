@@ -13,7 +13,10 @@ from backend.shared.models import CompanionReplyRow, HermesDecision, TelemetryEv
 class ModelTests(unittest.TestCase):
     def test_default_ollama_model_stays_on_fast_qwen(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(BackendSettings().ollama_model, "hermes-qwen35-4b:latest")
+            self.assertEqual(
+                BackendSettings().ollama_model,
+                "hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M",
+            )
 
     def test_telemetry_normalizes_channel_and_event_type(self) -> None:
         event = TelemetryEvent(
