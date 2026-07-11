@@ -2062,7 +2062,7 @@ def clean_model_reply(text: str) -> str:
     for _ in range(4):
         updated = re.sub(
             r"(?is)^\s*(?:"
-            r"do not include (?:any )?(?:preamble|postscript|meta commentary|system messages|system text|markdown|"
+            r"do not include (?:any )?(?:preamble|postscript|meta commentary|meta text|system messages|system text|markdown|"
             r"commentary|explanations|labels|emotion labels|stage directions)[^.?!]*(?:[.?!]|$)|"
             r"return only [^.?!]*(?:[.?!]|$)|"
             r"write (?:one|a) [^.?!]*(?:[.?!]|$)"
@@ -2083,7 +2083,11 @@ MODEL_INSTRUCTION_ECHO_REPLY_PATTERN = re.compile(
     r"do\s*(?:\.|$)|"
     r"return\s*(?:\.|$)|"
     r"write\s*(?:\.|$)|"
-    r"do not include\b.*\b(?:system|meta|commentary|reply|preamble|postscript|label|stage direction|explanation)\b|"
+    r"(?:one|two|three|one\s+or\s+two|one\s+to\s+three|1\s*(?:-|to)\s*3)\s+"
+    r"(?:natural\s+)?(?:party[- ]chat\s+)?lines?\b.*\b(?:under|characters?|chars?|each|reply|response)\b|"
+    r"(?:one|two|three|one\s+or\s+two|one\s+to\s+three|1\s*(?:-|to)\s*3)\s+"
+    r"(?:short\s+)?(?:reply|response|message)s?\b.*\b(?:under|characters?|chars?|each|line)\b|"
+    r"do not include\b.*\b(?:system|meta|commentary|reply|preamble|postscript|label|stage direction|explanation|response)\b|"
     r"return only\b.*\b(?:reply|line|message|response|persona)\b|"
     r"write (?:one|a)\b.*\b(?:reply|line|message|response)\b"
     r")",

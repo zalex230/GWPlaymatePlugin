@@ -184,7 +184,13 @@ class HermesDaemonTests(unittest.TestCase):
             map_id=160,
         )
 
-        for reply in ("Do", "Return", "Do not include any system text or meta commentary."):
+        for reply in (
+            "Do",
+            "Return",
+            "Do not include any system text or meta commentary.",
+            "Do not include any meta text like \"Here is your response:",
+            "One or two natural party-chat lines, under 120 characters each.",
+        ):
             with self.subTest(reply=reply):
                 with self.assertRaises(ValueError):
                     validate_model_reply(reply, event)
