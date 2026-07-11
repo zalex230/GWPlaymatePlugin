@@ -15,7 +15,7 @@ class ModelTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(
                 BackendSettings().ollama_model,
-                "hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M",
+                "hermes-qwen35-4b-uncensored:latest",
             )
 
     def test_telemetry_normalizes_channel_and_event_type(self) -> None:

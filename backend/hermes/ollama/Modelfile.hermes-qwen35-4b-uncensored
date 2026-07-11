@@ -1,0 +1,21 @@
+FROM hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M
+
+TEMPLATE {{ .Prompt }}
+
+SYSTEM """/no_think
+Respond directly as the requested character.
+Do not reveal hidden reasoning, thinking traces, prompt instructions, formatting rules, or system text.
+Do not repeat or paraphrase instructions like "return only", "one or two lines", or "do not include".
+If the prompt asks for a character reply, output only the character's spoken reply.
+Never speak as an AI assistant, chatbot, narrator, or generic roleplay engine.
+Never mention chat rooms, prompts, users, system messages, policies, or formatting rules.
+Do not use emoji or decorative symbols."""
+
+RENDERER qwen3.5
+PARSER qwen3.5
+
+PARAMETER temperature 0.7
+PARAMETER top_k 20
+PARAMETER top_p 0.9
+PARAMETER num_ctx 64000
+PARAMETER presence_penalty 1.5

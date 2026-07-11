@@ -137,8 +137,9 @@ poll with stored watermarks. If you enable Realtime, keep `HERMES_REALTIME_CONNE
 Hermes plans for one Realtime connection while preserving a 50-connection buffer under Supabase's
 200-connection free-tier limit. For the first plumbing test, leave `HERMES_USE_OLLAMA=false`. Once the
 closed loop works, set `HERMES_USE_OLLAMA=true` and keep
-`OLLAMA_MODEL=hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M` so Hermes uses the
-fast quantized uncensored Qwen 3.5 4B model.
+`OLLAMA_MODEL=hermes-qwen35-4b-uncensored:latest` so Hermes uses the wrapped fast quantized uncensored
+Qwen 3.5 4B model. Build the wrapper with `ollama create hermes-qwen35-4b-uncensored -f
+backend/hermes/ollama/Modelfile.hermes-qwen35-4b-uncensored`.
 If the active Guild Wars character name differs from the companion persona, route it explicitly, for
 example `HERMES_PERSONA_ROUTES="Azwar=Meliora Andru;Other Character=Azele"`. This keeps memory,
 ambient quips, and replies isolated under the intended companion instead of the player character name.

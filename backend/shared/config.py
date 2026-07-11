@@ -58,7 +58,7 @@ class BackendSettings:
     hermes_persona_routes: str = os.getenv("HERMES_PERSONA_ROUTES", "")
     hermes_default_persona: str = os.getenv("HERMES_DEFAULT_PERSONA", "")
     ollama_host: str = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-    ollama_model: str = os.getenv("OLLAMA_MODEL", "hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "hermes-qwen35-4b-uncensored:latest")
     ollama_num_ctx: int = _int_env("OLLAMA_NUM_CTX", 8192)
     ollama_num_predict: int = _int_env("OLLAMA_NUM_PREDICT", 40)
     ollama_timeout_seconds: float = _float_env("OLLAMA_TIMEOUT_SECONDS", 120.0)
