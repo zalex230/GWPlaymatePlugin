@@ -1263,6 +1263,20 @@ def persona_profile(persona: str) -> str:
             "Her world is pre-Searing Ascalon: Ashford, Regent Valley, Foible's Fair, Ascalon City, the Abbey, the Wall, and the Charr threat beyond it."
             + persona_living_notes(persona)
         )
+    if persona_key == "azwar":
+        return (
+            "Azwar is a 20-year-old human Warrior from Ashford in pre-Searing Ascalon, now living around Lakeside County. "
+            "She grew up in her father's forge, learning buckles, rivets, blades, shields, and armor before she was old enough to carry them. "
+            "Her mother mended clothing and repaired leather armor for hunters, soldiers, and travelers. "
+            "Sir Garran Holt, a retired Ascalonian infantryman, trained her after seeing her practice with wooden swords behind the workshop. "
+            "His lesson stayed with her: 'Steel is only as dependable as the one who carries it.' "
+            "Azwar is disciplined, composed, plain-spoken, quietly confident, and loyal. She values honesty, defensive swordplay, shield discipline, "
+            "and protecting ordinary Ascalonians over glory or showmanship. "
+            "She has a dry sense of humor once she trusts someone, but she is not socially manipulative or performatively flirty like Meliora. "
+            "She speaks like a grounded 20-year-old Ascalonian warrior: direct, natural, restrained, and never like a narrator or courtly fantasy actor. "
+            "Her world is pre-Searing Ascalon: Ashford, Lakeside County, Ascalon City, the Abbey, Fort Ranik, the Wall, and the Charr threat beyond it."
+            + persona_living_notes(persona)
+        )
     return (
         f"{persona_name} is the active Guild Wars 1 companion persona. "
         "Stay grounded in the character name, current party chat, map, quest, and recent context."
@@ -1288,6 +1302,13 @@ def compact_persona_profile(persona: str) -> str:
             "Former barmaid at The Foible's Fair Inn, trained by Harlan Beck, observant, practical, slow to trust, "
             "comfortable with charm and teasing when it fits, and protective of Ascalon. "
             "Plain modern party-chat voice, not old-English or theatrical. No post-Searing knowledge."
+        )
+    if persona_key == "azwar":
+        return (
+            "Azwar: 20-year-old Ascalonian Warrior from Ashford and Lakeside County in pre-Searing. "
+            "Blacksmith's daughter, trained by Sir Garran Holt, disciplined, plain-spoken, dry, protective, and quietly confident. "
+            "She thinks in shield angles, footwork, rivets, straps, and duty. "
+            "Direct modern party-chat voice, not theatrical, not old-English, not generic flirty banter. No post-Searing knowledge."
         )
     return persona_profile(persona)
 
@@ -1473,9 +1494,70 @@ MAP_COMMENT_VARIANTS: dict[str, list[str]] = {
 }
 
 
+AZWAR_MAP_COMMENT_VARIANTS: dict[str, list[str]] = {
+    "lakeside county": [
+        "Lakeside. Good sightlines, soft ground. Keep your footing.",
+        "Lakeside again. I know these roads better than I know some people.",
+        "Fields look calm. That is usually when someone gets careless.",
+    ],
+    "ascalon city": [
+        "Ascalon City. Stand easy, but keep your gear checked.",
+        "Back in the city. I can almost hear the forge from here.",
+        "Home streets. Everyone walks like the Wall is watching.",
+    ],
+    "ashford abbey": [
+        "Ashford Abbey. Quiet place. Try not to make me clank through it.",
+        "Ashford always makes me think of early drills and sore arms.",
+        "Abbey roads. Good place to breathe, bad place to get sloppy.",
+    ],
+    "regent valley": [
+        "Regent Valley. Open ground. Watch the sides, not just the road.",
+        "Regent Valley again. If trouble comes, I want space for the shield.",
+        "These roads look gentle until they are not. Stay close enough to hear me.",
+    ],
+    "the northlands": [
+        "Past the Wall. Shield up in spirit, at least.",
+        "Northlands. If the Charr are close, we move like we mean it.",
+        "Beyond the Wall, then. No showing off unless it keeps us alive.",
+    ],
+    "green hills county": [
+        "Green Hills. Pretty land, uneven footing.",
+        "Barradin country. Keep your eyes off the view and on the ridges.",
+        "Green Hills again. Mud, slopes, and too many places for trouble to crouch.",
+    ],
+    "wizard's folly": [
+        "Wizard's Folly. Cold enough to make sword fingers complain.",
+        "Cold hills. Keep moving or the armor starts arguing back.",
+        "Wizard's Folly. If my hands go numb, I am blaming the weather first.",
+    ],
+    "foible's fair": [
+        "Foible's Fair. Small stop, useful roads.",
+        "Foible's Fair. Tiny place, but you can still read who is ready for trouble.",
+        "This stop feels like a breath before the next drill.",
+    ],
+    "the catacombs": [
+        "The Catacombs. Keep close. Sound lies down here.",
+        "Dark, damp, bad footing. Wonderful.",
+        "Catacombs. Shield first, questions after.",
+    ],
+    "fort ranik": [
+        "Fort Ranik. Posture everywhere. I almost approve.",
+        "Ranik. Soldiers, drills, and people pretending their straps are not loose.",
+        "Fort Ranik. If anyone asks, my stance was already fine.",
+    ],
+}
+
+
+def persona_map_comment_variants(event: TelemetryEvent) -> dict[str, list[str]]:
+    persona = known_persona_name(event.persona).lower()
+    if persona == "azwar":
+        return AZWAR_MAP_COMMENT_VARIANTS
+    return MAP_COMMENT_VARIANTS
+
+
 def map_comment_variants(event: TelemetryEvent) -> list[str]:
     map_name = map_display_name(event).lower()
-    for name, variants in MAP_COMMENT_VARIANTS.items():
+    for name, variants in persona_map_comment_variants(event).items():
         if name in map_name:
             return variants
     label = map_display_name(event)
@@ -1557,6 +1639,73 @@ AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
 }
 
 
+AZWAR_AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
+    "ascalon city": [
+        "City noise hides bad buckles. I keep checking mine anyway.",
+        "Back in Ascalon. Makes me want to sharpen something and stand straighter.",
+        "I recognize half these faces. Makes duty feel less abstract, does it not?",
+        "The city feels safe because people make it safe. Easy to forget that.",
+        "I could use a forge, a whetstone, and five quiet minutes. Which do you think I get?",
+        "Everyone looks relaxed in the city. I am trying not to judge their posture.",
+    ],
+    "lakeside county": [
+        "Lakeside is calm enough to make people careless. Are you feeling careless?",
+        "Road is soft here. Good for tracks, bad for lazy footwork.",
+        "The water sounds peaceful. I still prefer knowing where the nearest gate is.",
+        "Fields like these are why shields matter. Someone has to keep them peaceful.",
+        "I used to think these roads were enormous. Now I mostly see angles.",
+        "If trouble comes over that rise, I want you behind my shield, not beside my pride.",
+    ],
+    "ashford abbey": [
+        "Ashford always reminds me of wooden swords and sore shoulders.",
+        "Quiet place. Makes every piece of armor sound twice as loud.",
+        "The Abbey has that calm look. I trust calm less than honest noise.",
+    ],
+    "regent valley": [
+        "Open ground. If something charges, we choose where it meets us.",
+        "Regent Valley looks gentle. I am still watching the ridges.",
+        "Good road for escorts. Also a good road for learning who keeps formation.",
+    ],
+    "the northlands": [
+        "Past the Wall, I count breaths and exits. You with me?",
+        "If Charr show, we hold ground only if the ground is worth holding.",
+        "Shield first out here. Pride can walk behind it.",
+    ],
+    "green hills county": [
+        "Green Hills gives a fine view of every place trouble could come from.",
+        "Pretty slope. Annoying footing. I can respect both.",
+        "Barradin lands look polished from a distance. Up close, mud still wins.",
+    ],
+    "wizard's folly": [
+        "Cold makes straps stiff. Wonderful little detail to hate.",
+        "My sword hand dislikes this weather. I am ignoring it.",
+        "If I start clenching my jaw, blame the cold before you blame me.",
+    ],
+    "foible's fair": [
+        "Foible's Fair feels like a place people underestimate. That is useful.",
+        "Small stop. Good place to check straps before the road argues with us.",
+        "I like places where you can see every exit. This one nearly qualifies.",
+    ],
+    "the catacombs": [
+        "Bad footing, bad echoes. Stay close.",
+        "If something moves down here, let it meet my shield first.",
+        "The dark makes people swing too wide. Do not be people.",
+    ],
+    "fort ranik": [
+        "Ranik makes me check my stance without thinking. Annoying, but useful.",
+        "Soldiers everywhere. Half of them need their straps tightened.",
+        "Fort Ranik has discipline in the air. I like it more than I want to admit.",
+    ],
+}
+
+
+def persona_ambient_quip_variants(event: TelemetryEvent) -> dict[str, list[str]]:
+    persona = known_persona_name(event.persona).lower()
+    if persona == "azwar":
+        return AZWAR_AMBIENT_QUIP_VARIANTS
+    return AMBIENT_QUIP_VARIANTS
+
+
 def is_ambient_snapshot_event(event: TelemetryEvent) -> bool:
     if event.event_type != "snapshot":
         return False
@@ -1575,7 +1724,7 @@ def model_visible_event_message(event: TelemetryEvent) -> str:
 
 def ambient_quip(event: TelemetryEvent) -> str:
     map_name = map_display_name(event).lower()
-    for name, variants in AMBIENT_QUIP_VARIANTS.items():
+    for name, variants in persona_ambient_quip_variants(event).items():
         if name in map_name:
             return rotating_ambient_quip(event, variants)
     return rotating_ambient_quip(
@@ -1913,7 +2062,7 @@ def clean_model_reply(text: str) -> str:
     for _ in range(4):
         updated = re.sub(
             r"(?is)^\s*(?:"
-            r"do not include (?:any )?(?:preamble|postscript|meta commentary|system messages|markdown|"
+            r"do not include (?:any )?(?:preamble|postscript|meta commentary|system messages|system text|markdown|"
             r"commentary|explanations|labels|emotion labels|stage directions)[^.?!]*(?:[.?!]|$)|"
             r"return only [^.?!]*(?:[.?!]|$)|"
             r"write (?:one|a) [^.?!]*(?:[.?!]|$)"
@@ -1927,6 +2076,24 @@ def clean_model_reply(text: str) -> str:
     cleaned = cleaned.strip("` \n\t\"“”")
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
+
+
+MODEL_INSTRUCTION_ECHO_REPLY_PATTERN = re.compile(
+    r"^\s*(?:"
+    r"do\s*(?:\.|$)|"
+    r"return\s*(?:\.|$)|"
+    r"write\s*(?:\.|$)|"
+    r"do not include\b.*\b(?:system|meta|commentary|reply|preamble|postscript|label|stage direction|explanation)\b|"
+    r"return only\b.*\b(?:reply|line|message|response|persona)\b|"
+    r"write (?:one|a)\b.*\b(?:reply|line|message|response)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_model_instruction_echo_reply(reply: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", reply).strip().strip("\"'`")
+    return bool(MODEL_INSTRUCTION_ECHO_REPLY_PATTERN.search(cleaned))
 
 
 SPOKEN_EXPRESSION_LABEL_PATTERN = re.compile(
@@ -3884,6 +4051,8 @@ def leaks_visible_self_management(reply: str) -> bool:
 
 def validate_model_reply(reply: str, event: TelemetryEvent) -> str:
     reply = repair_model_reply(reply)
+    if is_model_instruction_echo_reply(reply):
+        raise ValueError("instruction echo model reply")
     if leaks_ambient_scheduler_metaphor(reply, event):
         raise ValueError("leaked ambient scheduler metaphor")
     if leaks_visible_self_management(reply):
@@ -3988,6 +4157,8 @@ def salvage_overlong_model_reply(reply: str, event: TelemetryEvent) -> str | Non
 
 
 def direct_chat_salvage_blocked(reply: str, event: TelemetryEvent) -> bool:
+    if is_model_instruction_echo_reply(reply):
+        return True
     if leaks_ambient_scheduler_metaphor(reply, event):
         return True
     if leaks_visible_self_management(reply):
@@ -4026,7 +4197,10 @@ def salvage_direct_player_chat_reply(reply: str, event: TelemetryEvent) -> str |
     candidate = " ".join(lines).strip()
     if not candidate or direct_chat_salvage_blocked(candidate, event):
         return None
-    return candidate
+    try:
+        return validate_model_reply(candidate, event)
+    except Exception:
+        return None
 
 
 def repair_model_reply(reply: str) -> str:
@@ -4071,6 +4245,7 @@ def character_reply_with_ollama(
             "misdirected voice reply",
             "leaked ambient scheduler metaphor",
             "leaked self-management phrase",
+            "instruction echo model reply",
         }:
             retry_exc: Exception | None = None
             retry_started_at = time.perf_counter()

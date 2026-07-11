@@ -19,6 +19,7 @@ from backend.hermes_daemon.daemon import (
     LOW_QUALITY_REPLY_PATTERNS,
     AMBIENT_HEARTBEAT_ACTIVITY_SECONDS,
     AMBIENT_QUIP_MIN_SECONDS,
+    ambient_quip,
     ambient_identity,
     ambient_heartbeat_reply,
     build_character_reply_prompt,
@@ -172,6 +173,38 @@ class HermesDaemonTests(unittest.TestCase):
             clean_model_reply(raw),
             "Yeah, right there. Just need a moment to clear my head before we move again.",
         )
+
+    def test_instruction_echo_fragments_are_not_salvaged_as_replies(self) -> None:
+        event = TelemetryEvent(
+            persona="Azwar",
+            event_type="player_chat",
+            sender="Player",
+            channel="party",
+            message="hey Az",
+            map_id=160,
+        )
+
+        for reply in ("Do", "Return", "Do not include any system text or meta commentary."):
+            with self.subTest(reply=reply):
+                with self.assertRaises(ValueError):
+                    validate_model_reply(reply, event)
+                self.assertIsNone(hermes_daemon.salvage_direct_player_chat_reply(reply, event))
+
+    def test_azwar_ambient_quips_use_warrior_voice(self) -> None:
+        event = TelemetryEvent(
+            persona="Azwar",
+            event_type="snapshot",
+            sender="System",
+            channel="system",
+            message="quiet ambient moment",
+            map_id=166,
+            map_name="Green Hills County",
+        )
+
+        quip = ambient_quip(event)
+
+        self.assertRegex(quip.lower(), r"view|footing|ridges|mud|trouble|slope")
+        self.assertNotRegex(quip.lower(), r"boots|hair|pretty fields")
 
     def test_local_context_is_isolated_by_persona(self) -> None:
         original_settings = hermes_daemon.settings
