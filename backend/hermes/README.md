@@ -40,6 +40,8 @@ Useful environment variables live in `backend/.env`:
 - `OLLAMA_NUM_PREDICT`
 - `HERMES_PLAYER_CHAT_OLLAMA_NUM_PREDICT` (default: `160`; lets direct conversation finish multi-message replies without affecting terse ambient/combat generations)
 - `HERMES_AMBIENT_USE_OLLAMA` (default: `false`; keep ambient quips cheap so player chat gets the local model first)
+- `HERMES_PERSONA_ROUTES` (optional; semicolon-separated player-character to companion routes, for example `Azwar=Meliora Andru`)
+- `HERMES_DEFAULT_PERSONA` (optional; fallback companion for unknown active character names)
 - `HERMES_TTS_PROVIDER`
 - `KOKORO_TTS_URL`
 - `KOKORO_TTS_VOICE`

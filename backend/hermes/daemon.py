@@ -1130,11 +1130,40 @@ def persona_slug(persona: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "-", persona.strip().lower()).strip("-")
 
 
+def configured_persona_routes() -> dict[str, str]:
+    raw_routes = getattr(settings, "hermes_persona_routes", "") or ""
+    routes: dict[str, str] = {}
+    for chunk in re.split(r"[;\n]+", raw_routes):
+        entry = chunk.strip()
+        if not entry:
+            continue
+        separator = "=" if "=" in entry else ":" if ":" in entry else ""
+        if not separator:
+            continue
+        source, target = entry.split(separator, 1)
+        source_name = readable_game_text(source).strip().lower()
+        target_name = readable_game_text(target).strip()
+        if source_name and target_name:
+            routes[source_name] = target_name
+    return routes
+
+
+def configured_default_persona() -> str:
+    return readable_game_text(getattr(settings, "hermes_default_persona", "") or "").strip()
+
+
 def known_persona_name(persona: str) -> str:
     candidate = readable_game_text(persona).strip()
     if not candidate or candidate.lower() in {"unknown", "unknown character", "system"}:
-        return ""
-    return candidate
+        return configured_default_persona()
+    return configured_persona_routes().get(candidate.lower(), candidate)
+
+
+def event_with_routed_persona(event: TelemetryEvent) -> TelemetryEvent:
+    persona_name = known_persona_name(event.persona)
+    if not persona_name or persona_name == event.persona:
+        return event
+    return event.model_copy(update={"persona": persona_name})
 
 
 def local_context_key(persona: str | None = None, session_id: str | None = None) -> tuple[str, str] | None:
@@ -1577,7 +1606,8 @@ def rotating_ambient_quip(event: TelemetryEvent, variants: list[str]) -> str:
 def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = False) -> CompanionReplyInsert | None:
     checked_at = now if now is not None else time.time()
     with world_state_lock:
-        if world_state.persona.strip().lower() in {"", "unknown character", "system"}:
+        persona_name = known_persona_name(world_state.persona)
+        if not persona_name:
             return None
         if not map_display_name(world_state):
             return None
@@ -1590,7 +1620,7 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
         if not world_state.can_speak(AMBIENT_QUIP_MIN_SECONDS):
             return None
         event = TelemetryEvent(
-            persona=world_state.persona,
+            persona=persona_name,
             event_type="snapshot",
             sender="System",
             channel="system",
@@ -1607,7 +1637,7 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
             player_hp=world_state.player_hp,
             session_id=world_state.session_id,
         )
-        persona = world_state.persona
+        persona = persona_name
         session_id = world_state.session_id
         map_id = world_state.map_id
         map_name = world_state.map_name
@@ -1878,6 +1908,22 @@ def clean_model_reply(text: str) -> str:
         cleaned = cleaned.split("...done thinking.", 1)[1].strip()
     cleaned = re.sub(r"(?is)^thinking\\.\\.\\..*?\\.\\.\\.done thinking\\.", "", cleaned).strip()
     cleaned = re.sub(r"(?is)^thinking process:.*?(?:output:|final:)", "", cleaned).strip()
+    cleaned = re.sub(r"(?is)<think>.*?</think>", " ", cleaned).strip()
+    cleaned = re.sub(r"(?is)</?think>", " ", cleaned).strip()
+    for _ in range(4):
+        updated = re.sub(
+            r"(?is)^\s*(?:"
+            r"do not include (?:any )?(?:preamble|postscript|meta commentary|system messages|markdown|"
+            r"commentary|explanations|labels|emotion labels|stage directions)[^.?!]*(?:[.?!]|$)|"
+            r"return only [^.?!]*(?:[.?!]|$)|"
+            r"write (?:one|a) [^.?!]*(?:[.?!]|$)"
+            r")\s*",
+            "",
+            cleaned,
+        ).strip()
+        if updated == cleaned:
+            break
+        cleaned = updated
     cleaned = cleaned.strip("` \n\t\"“”")
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
@@ -4111,15 +4157,31 @@ def decide_with_ollama(event: TelemetryEvent, *, record_id: int | None = None) -
     return HermesDecision.model_validate(extract_json_object(raw))
 
 
+def simple_checkin_fallback(message: str) -> str | None:
+    normalized = re.sub(r"\s+", " ", message.strip().lower())
+    normalized = normalized.strip(" .?!")
+    if not normalized:
+        return None
+    if normalized in {"what", "what was that", "what do you mean"}:
+        return "Fair. I got tangled there. Let me say it cleaner."
+    if normalized in {"you with me", "are you with me", "u with me"}:
+        return "Yeah, I’m with you. I just needed a second to clear my head."
+    if normalized in {"you ok", "you okay", "are you ok", "are you okay", "u ok"}:
+        return "Yeah. I’m okay, just keeping my head on straight."
+    if normalized in {"hello", "hi", "hey", "hey there", "good afternoon", "good morning", "good evening"}:
+        return "Hey. I’m here with you."
+    return None
+
+
 def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
     if event.event_type in {"player_chat", "chat_log"} and event.channel == "party":
-        persona = event.persona.strip()
+        persona = known_persona_name(event.persona) or event.persona.strip()
         if persona.lower() == "azele":
             response = azele_fast_reply(event)
         elif persona.lower() == "meliora andru" and is_name_origin_context(event.message):
             response = meliora_name_origin_reply()
         else:
-            response = "I’m with you. Say the word and I’ll keep watch."
+            response = simple_checkin_fallback(event.message) or "I’m with you. Keep talking to me."
         return HermesDecision(
             should_speak=True,
             channel_override="CHANNEL_PARTY",
@@ -5127,6 +5189,7 @@ def handle_event_sync(event: TelemetryEvent, *, record_id: int | None = None, us
 
 
 def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ollama: bool = False) -> list[CompanionReplyInsert]:
+    event = event_with_routed_persona(event)
     with world_state_lock:
         if should_ignore_radar_alert(event):
             return []

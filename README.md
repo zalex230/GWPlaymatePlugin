@@ -139,6 +139,9 @@ Hermes plans for one Realtime connection while preserving a 50-connection buffer
 closed loop works, set `HERMES_USE_OLLAMA=true` and keep
 `OLLAMA_MODEL=hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M` so Hermes uses the
 fast quantized uncensored Qwen 3.5 4B model.
+If the active Guild Wars character name differs from the companion persona, route it explicitly, for
+example `HERMES_PERSONA_ROUTES="Azwar=Meliora Andru;Other Character=Azele"`. This keeps memory,
+ambient quips, and replies isolated under the intended companion instead of the player character name.
 
 Optional Kokoro TTS audio needs three pieces:
 

@@ -22,6 +22,7 @@ from backend.hermes_daemon.daemon import (
     ambient_identity,
     ambient_heartbeat_reply,
     build_character_reply_prompt,
+    clean_model_reply,
     event_from_environment_alert,
     event_from_game_log,
     expire_pending_replies_before_player_chat,
@@ -33,6 +34,7 @@ from backend.hermes_daemon.daemon import (
     is_stale_polled_record,
     last_map_comment_by_session,
     map_comment_variant_by_session,
+    known_persona_name,
     likely_gw_wiki_question,
     memory_event_from,
     memory_buffers,
@@ -118,6 +120,58 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(payload["realtime_planned_connections"], 1)
         self.assertEqual(payload["realtime_connection_budget"], 150)
         self.assertTrue(payload["realtime_budget_ok"])
+
+    def test_known_persona_name_uses_configured_player_routes(self) -> None:
+        original_settings = hermes_daemon.settings
+        hermes_daemon.settings = replace(original_settings, hermes_persona_routes="Azwar=Meliora Andru")
+        try:
+            self.assertEqual(known_persona_name("Azwar"), "Meliora Andru")
+            event = TelemetryEvent(
+                persona="Azwar",
+                event_type="player_chat",
+                sender="Player",
+                channel="party",
+                message="where did you get your name?",
+            )
+            prompt = build_character_reply_prompt(event)
+        finally:
+            hermes_daemon.settings = original_settings
+
+        self.assertIn("Meliora Andru", prompt)
+        self.assertNotIn("Return only Azwar", prompt)
+
+    def test_process_event_records_replies_under_routed_persona(self) -> None:
+        original_settings = hermes_daemon.settings
+        hermes_daemon.settings = replace(original_settings, hermes_persona_routes="Azwar=Meliora Andru")
+        try:
+            replies = process_event(
+                TelemetryEvent(
+                    persona="Azwar",
+                    event_type="player_chat",
+                    sender="Player",
+                    channel="party",
+                    message="hello",
+                    session_id="local-playtest",
+                ),
+                use_ollama=False,
+            )
+        finally:
+            hermes_daemon.settings = original_settings
+
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0].persona, "Meliora Andru")
+
+    def test_clean_model_reply_strips_instruction_echo_and_think_tags(self) -> None:
+        raw = (
+            "Do not include any meta commentary or explanations.\n\n"
+            "<think>\n\n</think>\n\n"
+            "Yeah, right there. Just need a moment to clear my head before we move again."
+        )
+
+        self.assertEqual(
+            clean_model_reply(raw),
+            "Yeah, right there. Just need a moment to clear my head before we move again.",
+        )
 
     def test_local_context_is_isolated_by_persona(self) -> None:
         original_settings = hermes_daemon.settings
