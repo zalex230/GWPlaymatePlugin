@@ -2917,7 +2917,7 @@ class HermesDaemonTests(unittest.TestCase):
             "I could stay a while if you wanted to look around.",
         )
 
-    def test_ollama_generation_includes_player_map_and_ambient_events(self) -> None:
+    def test_ollama_generation_includes_player_and_ambient_but_not_map_events(self) -> None:
         chat_event = event_from_game_log(
             {
                 "sender": "Player",
@@ -2944,7 +2944,7 @@ class HermesDaemonTests(unittest.TestCase):
         )
 
         self.assertTrue(should_use_ollama_for_event(chat_event))
-        self.assertTrue(should_use_ollama_for_event(map_event))
+        self.assertFalse(should_use_ollama_for_event(map_event))
         self.assertFalse(should_use_ollama_for_event(snapshot_event))
 
         original_settings = hermes_daemon.settings
@@ -2953,6 +2953,33 @@ class HermesDaemonTests(unittest.TestCase):
             self.assertTrue(should_use_ollama_for_event(snapshot_event))
         finally:
             hermes_daemon.settings = original_settings
+
+    def test_map_entry_with_ollama_enabled_uses_fast_local_comment(self) -> None:
+        original_decide = hermes_daemon.decide_with_ollama
+        hermes_daemon.decide_with_ollama = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected ollama call"))
+        try:
+            replies = process_event(
+                event_from_game_log(
+                    {
+                        "sender": "System",
+                        "channel": "system",
+                        "message": "map_loaded",
+                        "metadata": {
+                            "event_type": "map_loaded",
+                            "persona": "Azele",
+                            "session_id": "map-fast-comment",
+                            "map_id": 148,
+                            "map_name": "Ascalon City",
+                        },
+                    }
+                ),
+                use_ollama=True,
+            )
+        finally:
+            hermes_daemon.decide_with_ollama = original_decide
+
+        self.assertEqual(len(replies), 1)
+        self.assertIn("Ascalon City", replies[0].message)
 
     def test_ollama_generation_includes_item_drop_events(self) -> None:
         event = event_from_game_log(
@@ -3607,14 +3634,9 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(len(replies), 1)
         self.assertRegex(replies[0].message.lower(), r"city|ascalon|streets|traders|guards|hair")
 
-    def test_map_entry_uses_ollama_generation_when_enabled(self) -> None:
+    def test_map_entry_uses_local_comment_even_when_ollama_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
-        hermes_daemon.character_reply_with_ollama = lambda event, **_: hermes_daemon.HermesDecision(
-            should_speak=True,
-            channel_override="CHANNEL_PARTY",
-            urgency="LOW",
-            response="Generated map thought. Where first?",
-        )
+        hermes_daemon.character_reply_with_ollama = lambda event, **_: (_ for _ in ()).throw(AssertionError("unexpected ollama call"))
         try:
             replies = process_event(
                 event_from_game_log(
@@ -3636,9 +3658,10 @@ class HermesDaemonTests(unittest.TestCase):
         finally:
             hermes_daemon.character_reply_with_ollama = original
 
-        self.assertEqual([reply.message for reply in replies], ["Generated map thought. Where first?"])
+        self.assertEqual(len(replies), 1)
+        self.assertIn("Ascalon City", replies[0].message)
 
-    def test_map_entry_drops_stale_reply_when_player_speaks_during_generation(self) -> None:
+    def test_map_entry_has_no_stale_generation_window_when_ollama_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
 
         def generate_after_player_chat(event: hermes_daemon.TelemetryEvent, **_: object) -> hermes_daemon.HermesDecision:
@@ -3672,7 +3695,8 @@ class HermesDaemonTests(unittest.TestCase):
         finally:
             hermes_daemon.character_reply_with_ollama = original
 
-        self.assertEqual(replies, [])
+        self.assertEqual(len(replies), 1)
+        self.assertIn("Ascalon City", replies[0].message)
 
     def test_ambient_snapshot_uses_ollama_generation_when_enabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
@@ -4535,6 +4559,57 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertEqual(replies[0].urgency, "HIGH")
         self.assertIn("94%", replies[0].message)
         self.assertEqual(replies[0].metadata["trigger_environment_alert_id"], 88)
+
+    def test_critical_under_attack_bypasses_recent_speech_cooldown(self) -> None:
+        world_state.last_spoken_at = time.time()
+
+        replies = process_event(
+            event_from_environment_alert(
+                {
+                    "id": 89,
+                    "alert_type": "under_attack",
+                    "severity": "HIGH",
+                    "message": "Azele is taking a heavy hit.",
+                    "payload": {
+                        "player_hp": 0.34,
+                        "player_hp_previous": 0.52,
+                        "player_hp_drop": 0.18,
+                        "hp_threshold_crossed": "35%",
+                        "damage_severity": "critical",
+                    },
+                }
+            ),
+            record_id=89,
+            use_ollama=True,
+        )
+
+        self.assertEqual(len(replies), 1)
+        self.assertIn("34%", replies[0].message)
+        self.assertEqual(replies[0].metadata["trigger_environment_alert_id"], 89)
+
+    def test_minor_under_attack_still_respects_recent_speech_cooldown(self) -> None:
+        world_state.last_spoken_at = time.time()
+
+        replies = process_event(
+            event_from_environment_alert(
+                {
+                    "id": 90,
+                    "alert_type": "under_attack",
+                    "severity": "NORMAL",
+                    "message": "Azele is taking a small hit.",
+                    "payload": {
+                        "player_hp": 0.96,
+                        "player_hp_previous": 0.99,
+                        "player_hp_drop": 0.03,
+                        "damage_severity": "normal",
+                    },
+                }
+            ),
+            record_id=90,
+            use_ollama=True,
+        )
+
+        self.assertEqual(replies, [])
 
     def test_fallback_rule_replies_to_near_death_damage(self) -> None:
         decision = fallback_rule_decision(

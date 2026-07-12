@@ -2329,13 +2329,14 @@ def should_use_direct_character_reply(event: TelemetryEvent) -> bool:
 
 
 def should_use_ollama_for_event(event: TelemetryEvent) -> bool:
+    if event.event_type in MAP_COMMENT_EVENT_TYPES:
+        return False
     if is_ambient_snapshot_event(event) and not settings.hermes_ambient_use_ollama:
         return False
     return (
         (event.event_type in {"player_chat", "chat_log"} and event.channel == "party")
         or is_npc_dialogue_event(event)
         or is_ambient_snapshot_event(event)
-        or event.event_type in MAP_COMMENT_EVENT_TYPES
         or event.event_type == "item_drop"
     )
 
@@ -2393,6 +2394,27 @@ def should_speak_for_environment_alert(event: TelemetryEvent) -> bool:
     if event.alert_type == "party_member_down":
         return True
     return False
+
+
+def should_bypass_speech_cooldown_for_event(event: TelemetryEvent) -> bool:
+    if event.event_type in {"party_member_down", "party_defeated"}:
+        return True
+    if event.event_type != "environment_alert":
+        return False
+    if event.alert_type == "party_member_down":
+        return True
+    if event.alert_type == "combat_started":
+        return event.close_hostile_count >= 2 and has_visible_enemy_context(event)
+    if event.alert_type == "status_effect":
+        return bool(readable_game_text(getattr(event, "effect_name", "")) or readable_game_text(getattr(event, "effect_type", "")))
+    if event.alert_type != "under_attack":
+        return False
+
+    threshold = readable_game_text(getattr(event, "hp_threshold_crossed", ""))
+    severity = readable_game_text(getattr(event, "damage_severity", "") or getattr(event, "severity", "")).lower()
+    hp = float(getattr(event, "player_hp", 0.0) or 0.0)
+    hp_drop = float(getattr(event, "player_hp_drop", 0.0) or 0.0)
+    return bool(threshold) or hp_drop >= 0.12 or (0 < hp <= 0.35) or severity in {"heavy", "critical", "near_death", "high"}
 
 
 def should_ignore_radar_alert(event: TelemetryEvent) -> bool:
@@ -5459,7 +5481,13 @@ def process_event(event: TelemetryEvent, *, record_id: int | None = None, use_ol
             required_cooldown = AMBIENT_QUIP_MIN_SECONDS
         else:
             required_cooldown = settings.hermes_min_speak_seconds
-        if not is_map_entry and not (is_direct_player_chat or is_party_chat_log) and not world_state.can_speak(required_cooldown):
+        bypass_speech_cooldown = should_bypass_speech_cooldown_for_event(event)
+        if (
+            not is_map_entry
+            and not (is_direct_player_chat or is_party_chat_log)
+            and not bypass_speech_cooldown
+            and not world_state.can_speak(required_cooldown)
+        ):
             should_speak_now = False
         elif not is_map_entry:
             should_speak_now = True
