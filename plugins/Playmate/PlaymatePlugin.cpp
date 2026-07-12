@@ -516,7 +516,11 @@ namespace {
     {
         static constexpr std::string_view triggers[] = {
             "player_chat",
+            "map_change",
+            "map_changed",
+            "map_loaded",
             "environment_alert",
+            "item_drop",
             "party_member_down",
             "party_defeated",
             "mission_objective_completed",
@@ -1193,13 +1197,7 @@ bool PlaymatePlugin::ShouldPollReplies() const
     if (!telemetry_enabled_.load() || !backend_enabled_.load() || !reply_injection_enabled_.load()) {
         return false;
     }
-
-    std::lock_guard lock(status_mutex_);
-    const uint64_t now = MonotonicMs();
-    if (waiting_for_reply_) {
-        return true;
-    }
-    return last_reply_ms_ > 0 && now - last_reply_ms_ < 15000;
+    return true;
 }
 
 int PlaymatePlugin::ReplyPollDelayMs() const
@@ -1216,7 +1214,7 @@ int PlaymatePlugin::ReplyPollDelayMs() const
     if (last_reply_ms_ > 0 && now - last_reply_ms_ < 15000) {
         return poll_interval_ms_.load();
     }
-    return 60000;
+    return 5000;
 }
 
 void PlaymatePlugin::QueueTelemetry(std::string event_type, std::string sender, std::string channel, std::string message)
