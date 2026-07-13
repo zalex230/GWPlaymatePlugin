@@ -1511,6 +1511,71 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex(reply.response.lower(), r"practical|straps|fit|style")
         self.assertNotRegex(reply.response.lower(), r"your call|whatever you want|depends")
 
+    def test_azwar_wolf_or_stalker_choice_is_preference_intent(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "so, asking you again. wolf or melandru stalker?",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"wolf|stalker|melandru")
+        self.assertNotRegex(reply.response.lower(), r"your call|whatever you want|depends")
+        self.assertEqual(
+            validate_model_reply("Wolf it is for now. Stalkers are too picky; wolves just want a fight.", event),
+            "Wolf it is for now. Stalkers are too picky; wolves just want a fight.",
+        )
+
+    def test_make_a_choice_followup_accepts_concrete_choice(self) -> None:
+        recent_reply_texts.append("Wolf or stalker? I can see either working, but I would pick wolf.")
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "make a choice. which one?",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar"},
+            }
+        )
+
+        self.assertFalse(
+            misses_clear_player_intent("Wolf. Direct, loyal, and less fussy.", event)
+        )
+
+    def test_preference_questions_use_shorter_ollama_budget(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "so, asking you again. wolf or melandru stalker?",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar"},
+            }
+        )
+        captured: dict[str, object] = {}
+        original = hermes_daemon.character_reply_with_ollama
+
+        def capture(event: object, **kwargs: object) -> hermes_daemon.HermesDecision:
+            captured.update(kwargs)
+            return hermes_daemon.HermesDecision(
+                should_speak=True,
+                channel_override="CHANNEL_PARTY",
+                urgency="NORMAL",
+                response="Wolf. Direct, loyal, and less fussy.",
+            )
+
+        hermes_daemon.character_reply_with_ollama = capture
+        try:
+            decision = hermes_daemon.decide_with_ollama(event, record_id=99)
+        finally:
+            hermes_daemon.character_reply_with_ollama = original
+
+        self.assertTrue(decision.should_speak)
+        self.assertLessEqual(captured["num_predict"], 96)
+
     def test_preference_prompt_requires_opinionated_answer(self) -> None:
         event = event_from_game_log(
             {

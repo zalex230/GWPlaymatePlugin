@@ -1441,6 +1441,10 @@ def is_preference_question_context(message: str) -> bool:
         return False
     if is_voice_preference_context(lowered) or is_skirt_outfit_question(lowered):
         return False
+    if re.search(r"\b(?:melandru\s+stalker|stalker|wolf|warthog)\b", lowered) and re.search(r"\bor\b|\bwhich\b|\bpick\b|\bchoice\b|\bprefer\b", lowered):
+        return True
+    if re.search(r"\bmake\s+a\s+choice\b|\bpick\s+one\b|\bwhich\s+one\b", lowered):
+        return True
     return bool(
         re.search(
             r"\b(?:what\s+do\s+you\s+(?:prefer|like|want|think)|which\s+(?:do\s+you\s+)?(?:prefer|like|want)|"
@@ -1456,11 +1460,17 @@ def companion_preference_reply(persona: str, message: str) -> str:
     persona_key = persona_name.lower()
     lowered = readable_game_text(message).lower()
 
-    if "pet" in lowered or "stalker" in lowered or "warthog" in lowered:
+    if ("stalker" in lowered and "wolf" in lowered) or ("melandru" in lowered and "wolf" in lowered):
+        if persona_key == "meliora andru":
+            return "Melandru stalker. It reads the trail better, and I trust patient hunters."
+        if persona_key == "azwar":
+            return "Wolf. Direct, loyal, and less fussy. I can work with that."
+        return "Melandru stalker. Cleaner, prettier, and it knows how to wait."
+    if "pet" in lowered or "stalker" in lowered or "warthog" in lowered or "wolf" in lowered:
         if persona_key == "meliora andru":
             return "Melandru stalker. Steadier, sharper, and easier to trust on a trail."
         if persona_key == "azwar":
-            return "Stalker. Cleaner footing, quicker response. A warthog hits hard, but I like control."
+            return "Wolf. Direct, loyal, and useful in a messy fight."
         return "Melandru stalker, I think. Cleaner, quicker, and honestly prettier."
     if re.search(r"\b(?:route|path|way|where|town|city|tunnel|run|hunt|charr|northlands|wall)\b", lowered):
         if persona_key == "meliora andru":
@@ -3397,8 +3407,6 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return not re.search(r"\b(?:tunnel|catacomb|scourge|careful|pull|bail|reset|regroup)\b", reply, re.IGNORECASE)
     if is_pet_evolution_context(message):
         return not re.search(r"\b(?:pet|dire|hearty|evol|develop|level\s*11|level|sturdy|harder)\b", reply, re.IGNORECASE)
-    if is_devona_pet_context(message):
-        return not re.search(r"\b(?:devona|pet|ranger|stalker|melandru|warthog|animal)\b", reply, re.IGNORECASE)
     if is_preference_question_context(message):
         if re.search(
             r"\b(?:your call|up to you|whatever you want|depends|either works|i'?m fine with either|what are we doing|what'?s up)\b",
@@ -3407,10 +3415,12 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         ):
             return True
         return not re.search(
-            r"\b(?:i prefer|i like|i want|i choose|i pick|my pick|my choice|honestly|favorite|favourite|better|practical|bold|stalker|shield|fire|trail|city|lakeside|ascalon)\b",
+            r"\b(?:i prefer|i like|i want|i choose|i pick|my pick|my choice|honestly|favorite|favourite|better|practical|bold|stalkers?|melandru|wol(?:f|ves)|warthogs?|shield|fire|trail|city|lakeside|ascalon)\b",
             reply,
             re.IGNORECASE,
         )
+    if is_devona_pet_context(message):
+        return not re.search(r"\b(?:devona|pet|ranger|stalkers?|melandru|wol(?:f|ves)|warthogs?|animal)\b", reply, re.IGNORECASE)
     if is_social_banter_context(message):
         return bool(
             re.search(r"\b(?:what are we doing|what'?s up|i'?m here|i’m here|i'?m listening|i’m listening)\b", reply, re.IGNORECASE)
@@ -4541,10 +4551,13 @@ def character_reply_with_ollama(
 def decide_with_ollama(event: TelemetryEvent, *, record_id: int | None = None) -> HermesDecision:
     if should_use_direct_character_reply(event):
         if event.event_type == "player_chat" and event.channel == "party":
+            player_num_predict = settings.hermes_player_chat_ollama_num_predict
+            if is_preference_question_context(event.message):
+                player_num_predict = min(player_num_predict, 96)
             return character_reply_with_ollama(
                 event,
                 timeout_seconds=settings.hermes_player_chat_ollama_timeout_seconds,
-                num_predict=settings.hermes_player_chat_ollama_num_predict,
+                num_predict=player_num_predict,
                 record_id=record_id,
             )
         return character_reply_with_ollama(event, record_id=record_id)
