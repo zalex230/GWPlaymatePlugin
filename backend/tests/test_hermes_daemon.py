@@ -1463,6 +1463,71 @@ class HermesDaemonTests(unittest.TestCase):
         self.assertRegex(reply.response.lower(), r"short|mini|longer|skirt")
         self.assertNotIn("point me at", reply.response.lower())
 
+    def test_fallback_gives_azele_general_preference_opinion(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "which route do you prefer?",
+                "metadata": {"event_type": "player_chat", "persona": "Azele"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"prefer|bold|prepared|alive|look good")
+        self.assertNotRegex(reply.response.lower(), r"your call|whatever you want|depends")
+
+    def test_fallback_gives_meliora_preference_opinion(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "meliora, what pet should we pick, stalker or warthog?",
+                "metadata": {"event_type": "player_chat", "persona": "Meliora Andru"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"melandru|stalker|trail")
+        self.assertNotRegex(reply.response.lower(), r"your call|whatever you want|depends")
+
+    def test_fallback_gives_azwar_preference_opinion(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "Azwar, which do you prefer, flashy armor or practical armor?",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar"},
+            }
+        )
+
+        reply = fallback_rule_decision(event)
+
+        self.assertTrue(reply.should_speak)
+        self.assertRegex(reply.response.lower(), r"practical|straps|fit|style")
+        self.assertNotRegex(reply.response.lower(), r"your call|whatever you want|depends")
+
+    def test_preference_prompt_requires_opinionated_answer(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "what do you prefer?",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar"},
+            }
+        )
+
+        prompt = build_character_reply_prompt(event)
+
+        self.assertIn("must give a real opinion and pick a side", prompt)
+        self.assertIn("Azwar", prompt)
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("Your call. I can work with either.", event)
+
     def test_fallback_handles_style_tease_about_how_she_dresses(self) -> None:
         event = event_from_game_log(
             {

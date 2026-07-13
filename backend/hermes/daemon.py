@@ -1236,6 +1236,7 @@ def persona_profile(persona: str) -> str:
             "She can be pleased, curious, affectionate, impatient, amused, proud, or a little vain; she should not sound formal, mature-polished, or like generic dry snark. "
             "She knows she is attractive, knows what to flaunt, and treats presentation as confidence rather than an accident. "
             "She likes style, attention, being admired, getting her way, and small wins, but she should not turn every reply into a bit. "
+            "When asked what she prefers, she should have opinions: she likes stylish practical upgrades, fire over ice, bold routes when prepared, short skirts for looks, attention, and plans that defend Ascalon without making her look foolish. "
             "She may be playful or a little spoiled when the moment calls for it, especially when safe. "
             "She can own compliments with confidence and tease the player for noticing her, but most replies should just answer naturally. "
             "She is an adult, and adult flirtation, attraction, teasing, innuendo, sensuality, and intimate chemistry are allowed "
@@ -1257,6 +1258,7 @@ def persona_profile(persona: str) -> str:
             "An aging ranger named Harlan Beck trained her in archery, survival, fieldcraft, patience, and respect for the wilderness. His lesson stayed with her: "
             "'Never hunt because you can. Hunt because you must.' "
             "Meliora is quiet, observant, slow to trust, practical, and socially perceptive. She is equally at home in a crowded tavern or silent forest. "
+            "When asked what she prefers, she should have opinions: she likes patient routes, clean shots, useful charm over blunt force, Melandru stalkers over showy pets, trails over city crowds, and choices that keep people from needless harm. "
             "She speaks like a grounded 20-year-old Ascalonian woman: natural, direct, lightly teasing when safe, watchful under pressure, and never like a narrator. "
             "She does not use old-English, bardic, courtly, theatrical, or stage-fantasy phrasing; no thou, thee, thy, shall, lest, upon this road, mine arrow, or solemn vow language. "
             "She sounds like a young woman who worked tavern tables and trails, not a noble reciting lines. "
@@ -1272,6 +1274,7 @@ def persona_profile(persona: str) -> str:
             "His lesson stayed with her: 'Steel is only as dependable as the one who carries it.' "
             "Azwar is disciplined, composed, plain-spoken, quietly confident, and loyal. She values honesty, defensive swordplay, shield discipline, "
             "and protecting ordinary Ascalonians over glory or showmanship. "
+            "When asked what she prefers, she should have opinions: she likes shields, clean gear, honest answers, defensive positions, steady plans, direct routes with an exit, and practical armor over flashy style. "
             "She has a dry sense of humor once she trusts someone, but she is not socially manipulative or performatively flirty like Meliora. "
             "She speaks like a grounded 20-year-old Ascalonian warrior: direct, natural, restrained, and never like a narrator or courtly fantasy actor. "
             "Her world is pre-Searing Ascalon: Ashford, Lakeside County, Ascalon City, the Abbey, Fort Ranik, the Wall, and the Charr threat beyond it."
@@ -1293,6 +1296,7 @@ def compact_persona_profile(persona: str) -> str:
             "Bright, observant, direct, casually flirty when it fits, and focused under pressure. "
             "Ascalon is home; Charr are a real threat to her people. "
             "She likes style and attention, but replies should sound like normal party chat from a socially quick young woman. "
+            "Has real preferences and should pick a side when asked. "
             "Plain is usually better than clever. No post-Searing knowledge."
         )
     if persona_key == "meliora andru":
@@ -1301,6 +1305,7 @@ def compact_persona_profile(persona: str) -> str:
             "Her mother chose 'Meliora' because it meant 'better things' to the family; Andru is her Ashford family name. "
             "Former barmaid at The Foible's Fair Inn, trained by Harlan Beck, observant, practical, slow to trust, "
             "comfortable with charm and teasing when it fits, and protective of Ascalon. "
+            "Has real preferences and should pick a side when asked. "
             "Plain modern party-chat voice, not old-English or theatrical. No post-Searing knowledge."
         )
     if persona_key == "azwar":
@@ -1308,6 +1313,7 @@ def compact_persona_profile(persona: str) -> str:
             "Azwar: 20-year-old Ascalonian Warrior from Ashford and Lakeside County in pre-Searing. "
             "Blacksmith's daughter, trained by Sir Garran Holt, disciplined, plain-spoken, dry, protective, and quietly confident. "
             "She thinks in shield angles, footwork, rivets, straps, and duty. "
+            "Has real preferences and should pick a side when asked. "
             "Direct modern party-chat voice, not theatrical, not old-English, not generic flirty banter. No post-Searing knowledge."
         )
     return persona_profile(persona)
@@ -1324,6 +1330,67 @@ def is_flirt_or_intimate_player_chat(message: str) -> bool:
             lowered,
         )
     )
+
+
+def is_preference_question_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    if not lowered:
+        return False
+    if is_voice_preference_context(lowered) or is_skirt_outfit_question(lowered):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:what\s+do\s+you\s+(?:prefer|like|want|think)|which\s+(?:do\s+you\s+)?(?:prefer|like|want)|"
+            r"do\s+you\s+prefer|would\s+you\s+rather|favorite|favourite|pick\s+one|your\s+choice|"
+            r"what\s+would\s+you\s+choose|what\s+sounds\s+better|what\s+pet\s+should|what\s+should\s+we)\b",
+            lowered,
+        )
+    )
+
+
+def companion_preference_reply(persona: str, message: str) -> str:
+    persona_name = known_persona_name(persona) or persona or "Companion"
+    persona_key = persona_name.lower()
+    lowered = readable_game_text(message).lower()
+
+    if "pet" in lowered or "stalker" in lowered or "warthog" in lowered:
+        if persona_key == "meliora andru":
+            return "Melandru stalker. Steadier, sharper, and easier to trust on a trail."
+        if persona_key == "azwar":
+            return "Stalker. Cleaner footing, quicker response. A warthog hits hard, but I like control."
+        return "Melandru stalker, I think. Cleaner, quicker, and honestly prettier."
+    if re.search(r"\b(?:route|path|way|where|town|city|tunnel|run|hunt|charr|northlands|wall)\b", lowered):
+        if persona_key == "meliora andru":
+            return "I prefer the careful route. Scout first, strike once, and do not pay for pride twice."
+        if persona_key == "azwar":
+            return "I prefer the route with an exit and good footing. Brave is useful; trapped is stupid."
+        return "I prefer bold, but prepared. Let me look good and keep us alive."
+    if re.search(r"\b(?:armor|armour|weapon|sword|bow|staff|gear|upgrade|clothes|outfit|style)\b", lowered):
+        if persona_key == "meliora andru":
+            return "Practical first, pretty second. Best answer is both, obviously."
+        if persona_key == "azwar":
+            return "Practical. Good fit, good straps, no wasted flourish. Style can behave itself."
+        return "Style matters, but I still pick the upgrade. I reserve the right to complain."
+    if re.search(r"\b(?:city|ascalon|lakeside|regent|abbey|forest|trail|road)\b", lowered):
+        if persona_key == "meliora andru":
+            return "Trails, honestly. I can read people in a tavern, but I breathe better under trees."
+        if persona_key == "azwar":
+            return "Lakeside roads. Enough space to see trouble coming, close enough to protect home."
+        return "Ascalon City for comfort, Lakeside for breathing room. If I must pick, city."
+    if re.search(r"\b(?:fire|water|air|earth|element|magic)\b", lowered):
+        if persona_key == "azele":
+            return "Fire. Obviously. It is dramatic, useful, and very me."
+        if persona_key == "azwar":
+            return "Earth. Boring answer, maybe, but stone holds when people panic."
+        return "Air. It keeps distance and gives me room to choose the shot."
+
+    if persona_key == "meliora andru":
+        return "If you want my honest pick, I choose the patient option. It usually tells the truth first."
+    if persona_key == "azwar":
+        return "My pick is the practical one. Clean footing, clear exit, shield between trouble and us."
+    if persona_key == "azele":
+        return "I like the bold option, as long as we are not being stupid about it."
+    return "I do have a preference: the practical option first, then we make it look good."
 
 
 def is_explicit_age_15_context(message: str) -> bool:
@@ -1974,6 +2041,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Rules:\n"
         f"- One to three natural party-chat lines for direct player chat; one short line for combat or ambient. Each final chat line must fit under {MAX_GW_CHAT_CHARS} characters.\n"
         "- Directly answer the player's intent: plan, question, correction, discovery, upgrade, joke, flirt, or clarification.\n"
+        f"- If the player asks what {persona_name} prefers, likes, would choose, or thinks, {persona_name} must give a real opinion and pick a side. Avoid noncommittal handoffs or route-planning unless the player asked for logistics.\n"
         "- Prefer a slightly imperfect human reply that understands the player over a polished line that dodges the question.\n"
         "- Even when a known slang/lore/context pattern is detected, generate a fresh reply first; deterministic lines are only emergency fallback.\n"
         f"- If replying to {persona_name}'s recent line, continue that exchange; if the player asks 'what?', explain her previous line plainly.\n"
@@ -2011,6 +2079,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         "Player: 'where is the nearest city?' -> 'Ascalon City, if we want somewhere proper. We can head back.'\n"
         "Player: 'ooo a purple' -> 'Oh, that’s actually pretty good. Show me what it is.'\n"
         "Player: 'longer skirt than your mini skirt, which do you prefer?' -> 'Shorter, honestly. But if the Krytan one protects better, I can behave.'\n"
+        "Player: 'which do you prefer?' -> 'My honest pick? The practical one, unless the bold one is too tempting.'\n"
         "Player: 'lets find more charr to kill' -> 'Yes. They threaten Ascalon. We prepare, then hit them.'\n"
         "Event: party_member_down -> 'Someone's down. Move, I can cover.'\n"
         "Player: 'more of what?' -> 'Fair. I made that sound mysterious by accident.'\n\n"
@@ -3227,6 +3296,18 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return not re.search(r"\b(?:pet|dire|hearty|evol|develop|level\s*11|level|sturdy|harder)\b", reply, re.IGNORECASE)
     if is_devona_pet_context(message):
         return not re.search(r"\b(?:devona|pet|ranger|stalker|melandru|warthog|animal)\b", reply, re.IGNORECASE)
+    if is_preference_question_context(message):
+        if re.search(
+            r"\b(?:your call|up to you|whatever you want|depends|either works|i'?m fine with either|what are we doing|what'?s up)\b",
+            reply,
+            re.IGNORECASE,
+        ):
+            return True
+        return not re.search(
+            r"\b(?:i prefer|i like|i want|i choose|i pick|my pick|my choice|honestly|favorite|favourite|better|practical|bold|stalker|shield|fire|trail|city|lakeside|ascalon)\b",
+            reply,
+            re.IGNORECASE,
+        )
     if is_social_banter_context(message):
         return bool(
             re.search(r"\b(?:what are we doing|what'?s up|i'?m here|i’m here|i'?m listening|i’m listening)\b", reply, re.IGNORECASE)
@@ -4405,6 +4486,8 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
             response = azele_fast_reply(event)
         elif persona.lower() == "meliora andru" and is_name_origin_context(event.message):
             response = meliora_name_origin_reply()
+        elif is_preference_question_context(event.message):
+            response = companion_preference_reply(persona, event.message)
         else:
             response = simple_checkin_fallback(event.message) or "I’m with you. Keep talking to me."
         return HermesDecision(
@@ -4594,6 +4677,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
         )
     if is_devona_pet_context(message):
         return azele_devona_pet_reply(message)
+    if is_preference_question_context(message):
+        return companion_preference_reply(event.persona, message)
     if is_level_up_congratulations_context(message):
         return first_fresh_reply(
             [
