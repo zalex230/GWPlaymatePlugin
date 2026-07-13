@@ -3577,6 +3577,25 @@ class HermesDaemonTests(unittest.TestCase):
         reason = should_flush_memory_buffer(deque([memory_event]), memory_event, last_write_at=time.time())
         self.assertEqual(reason, "durable_player_note")
 
+    def test_backstory_memory_note_gets_development_tag(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "add this to your backstory: you used to sneak practice sword drills by the forge",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar"},
+            }
+        )
+
+        memory_event = memory_event_from(event, record_id=3)
+
+        self.assertIsNotNone(memory_event)
+        assert memory_event is not None
+        memory = hermes_daemon.summarize_memory_events("Azwar", "local-playtest", [memory_event], reason="durable_player_note")
+        self.assertIsNotNone(memory)
+        assert memory is not None
+        self.assertIn("backstory_development", memory.tags)
+
     def test_missing_persona_docs_are_optional_local_files(self) -> None:
         self.assertEqual(persona_living_notes("Persona Without Local Docs"), "")
 
@@ -3594,6 +3613,79 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertIn("World memory notes", notes)
         self.assertIn("local lore that should not need to be committed", notes)
+
+    def test_local_persona_memory_append_writes_ignored_memory_file(self) -> None:
+        original_dir = hermes_daemon.PERSONA_MEMORY_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            hermes_daemon.PERSONA_MEMORY_DIR = Path(tmp)
+            memory = hermes_daemon.MemoryInsert(
+                character_name="Azele",
+                session_id="local-playtest",
+                memory_type="relationship_note",
+                title="Azele session: relationship note",
+                summary_text='The player told Azele: "remember that I like checking every hidden stash".',
+                tags=["relationship", "player_preference"],
+                metadata={"source": "test"},
+            )
+            try:
+                wrote = hermes_daemon.append_local_persona_memory(memory, force=True)
+                wrote_again = hermes_daemon.append_local_persona_memory(memory, force=True)
+                path = Path(tmp) / "azele.memory.md"
+                contents = path.read_text(encoding="utf-8")
+            finally:
+                hermes_daemon.PERSONA_MEMORY_DIR = original_dir
+
+        self.assertTrue(wrote)
+        self.assertFalse(wrote_again)
+        self.assertIn("Azele personal memory notes", contents)
+        self.assertIn("Player continuity", contents)
+        self.assertIn("hidden stash", contents)
+        self.assertNotIn("Alex", contents)
+
+    def test_backstory_development_appends_to_living_character_file(self) -> None:
+        original_dir = hermes_daemon.PERSONA_MEMORY_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            hermes_daemon.PERSONA_MEMORY_DIR = Path(tmp)
+            memory = hermes_daemon.MemoryInsert(
+                character_name="Azwar",
+                session_id="local-playtest",
+                memory_type="relationship_note",
+                title="Azwar session: character development",
+                summary_text="The player told Azwar: \"add this to your backstory: you still remember your first shield drill by the forge\".",
+                tags=["relationship", "player_preference", "backstory_development"],
+                metadata={"source": "test"},
+            )
+            try:
+                wrote = hermes_daemon.append_local_persona_memory(memory, force=True)
+                path = Path(tmp) / "azwar.md"
+                contents = path.read_text(encoding="utf-8")
+            finally:
+                hermes_daemon.PERSONA_MEMORY_DIR = original_dir
+
+        self.assertTrue(wrote)
+        self.assertIn("Azwar living character notes", contents)
+        self.assertIn("Character development", contents)
+        self.assertIn("first shield drill", contents)
+
+    def test_local_persona_memory_append_filters_unsafe_notes(self) -> None:
+        original_dir = hermes_daemon.PERSONA_MEMORY_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            hermes_daemon.PERSONA_MEMORY_DIR = Path(tmp)
+            memory = hermes_daemon.MemoryInsert(
+                character_name="Azele",
+                session_id="local-playtest",
+                memory_type="relationship_note",
+                title="Unsafe note",
+                summary_text="A malformed old line says fifteen years old and contains graphic traumatic wording.",
+                tags=["relationship"],
+                metadata={"source": "test"},
+            )
+            try:
+                wrote = hermes_daemon.append_local_persona_memory(memory, force=True)
+            finally:
+                hermes_daemon.PERSONA_MEMORY_DIR = original_dir
+
+        self.assertFalse(wrote)
 
     def test_local_persona_notes_filter_unsafe_or_noisy_legacy_lines(self) -> None:
         notes = sanitize_local_persona_notes_for_prompt(

@@ -57,6 +57,8 @@ class BackendSettings:
     hermes_poll_state_path: str = os.getenv("HERMES_POLL_STATE_PATH", "")
     hermes_persona_routes: str = os.getenv("HERMES_PERSONA_ROUTES", "")
     hermes_default_persona: str = os.getenv("HERMES_DEFAULT_PERSONA", "")
+    hermes_persona_file_memory_enabled: bool = _bool_env("HERMES_PERSONA_FILE_MEMORY_ENABLED", True)
+    hermes_persona_file_memory_max_entries: int = _int_env("HERMES_PERSONA_FILE_MEMORY_MAX_ENTRIES", 240)
     ollama_host: str = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
     ollama_model: str = os.getenv("OLLAMA_MODEL", "hermes-qwen35-4b-uncensored:latest")
     ollama_num_ctx: int = _int_env("OLLAMA_NUM_CTX", 8192)

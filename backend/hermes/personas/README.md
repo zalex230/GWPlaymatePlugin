@@ -10,6 +10,15 @@ Hermes will load these optional files when present:
 - `<persona>.lore.md`: local world knowledge the character can treat as lived context.
 - `<persona>.memory.md`: durable relationship or session continuity for that specific player and character.
 
+When `HERMES_PERSONA_FILE_MEMORY_ENABLED=true` (default), Hermes may append safe, durable play memories
+to these ignored local files after its normal memory flush:
+
+- ordinary relationship/session continuity goes to `<persona>.memory.md`
+- explicit character-development or backstory notes go to `<persona>.md`
+
+This is meant to make companions evolve with play while keeping private/player-specific details out of git.
+Set `HERMES_PERSONA_FILE_MEMORY_ENABLED=false` to disable local file updates.
+
 For example, a local Azele setup may use:
 
 ```text

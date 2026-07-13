@@ -236,7 +236,10 @@ DURABLE_PLAYER_MEMORY_PATTERNS = re.compile(
     r"remember|don't forget|do not forget|important|for later|from now on|"
     r"i prefer|i like|i love|i hate|my favorite|call me|"
     r"we decided|we learned|we found|we discovered|we met|"
-    r"i want you to|you should know|that matters|this matters"
+    r"i want you to|you should know|that matters|this matters|"
+    r"add this to (?:your|her|his|their) (?:memory|backstory|past)|"
+    r"part of (?:your|her|his|their) (?:memory|backstory|past)|"
+    r"you used to|you grew up|your past|your backstory"
     r")\b",
     re.IGNORECASE,
 )
@@ -475,6 +478,7 @@ def memory_tags_for(events: list[dict[str, Any]], rare_items: list[str]) -> list
     for event in events:
         event_type = event.get("event_type")
         notability = event.get("notability")
+        message = readable_game_text(event.get("message", "")).lower()
         if event_type in MEMORY_MAP_EVENT_TYPES:
             tags.add("map_change")
         if event_type == "active_quest_changed" or event.get("active_quest_id"):
@@ -486,6 +490,8 @@ def memory_tags_for(events: list[dict[str, Any]], rare_items: list[str]) -> list
         if notability == "durable_player_note":
             tags.add("relationship")
             tags.add("player_preference")
+            if re.search(r"\b(?:backstory|your past|grew up|used to|memory|remember|part of your)\b", message):
+                tags.add("backstory_development")
         if notability == "player_noted_discovery":
             tags.add("discovery")
         if notability == "npc_dialogue":
@@ -685,6 +691,11 @@ def flush_memory_buffer(
         return None
     try:
         insert_memory(memory)
+        try:
+            if append_local_persona_memory(memory):
+                print(f"Hermes local persona memory updated for {key[0]}.", flush=True)
+        except Exception as exc:
+            print(f"Hermes local persona memory update failed ({type(exc).__name__}).", flush=True)
         print(
             f"Hermes memory written for {key[0]} ({memory.memory_type}, {len(events)} events, reason={reason}).",
             flush=True,
@@ -788,6 +799,98 @@ def sanitize_local_persona_notes_for_prompt(text: str, *, max_chars: int) -> str
         cleaned_lines.append(line)
     cleaned = "\n".join(cleaned_lines).strip()
     return clamp_prompt_section(cleaned, max_chars=max_chars) if cleaned else ""
+
+
+def local_persona_memory_path(character_name: str, *, memory_type: str = "memory") -> Path | None:
+    slug = persona_slug(character_name)
+    if not slug:
+        return None
+    suffix = ".md" if memory_type == "living" else ".memory.md"
+    return PERSONA_MEMORY_DIR / f"{slug}{suffix}"
+
+
+def local_persona_memory_heading(character_name: str, *, memory_type: str = "memory") -> str:
+    persona_name = known_persona_name(character_name) or character_name.strip() or "Character"
+    if memory_type == "living":
+        return (
+            f"# {persona_name} living character notes\n\n"
+            "- These local notes may be extended by Hermes when play creates durable character development.\n"
+        )
+    return (
+        f"# {persona_name} personal memory notes\n\n"
+        "## Shared continuity\n\n"
+        "- These local notes are character-specific and should evolve from play.\n"
+    )
+
+
+def local_persona_note_from_memory(memory: MemoryInsert) -> tuple[str, str] | None:
+    character = known_persona_name(memory.character_name) or memory.character_name
+    summary = sanitize_memory_for_prompt(memory.summary_text)
+    summary = re.sub(r"\s+", " ", summary).strip()
+    if not character.strip() or not summary:
+        return None
+    if UNSAFE_OR_NOISY_LOCAL_MEMORY_PATTERN.search(summary):
+        return None
+
+    tags = set(memory.tags or [])
+    memory_file_type = "living" if "backstory_development" in tags else "memory"
+    today = datetime.now(timezone.utc).date().isoformat()
+    if memory_file_type == "living":
+        line = f"- {today}: Character development: {summary}"
+    elif memory.memory_type == "relationship_note":
+        line = f"- {today}: Player continuity: {summary}"
+    elif memory.memory_type == "combat_note":
+        line = f"- {today}: Combat memory: {summary}"
+    elif memory.memory_type == "rare_item":
+        line = f"- {today}: Rare discovery: {summary}"
+    elif memory.memory_type == "npc_dialogue":
+        line = f"- {today}: World/NPC note: {summary}"
+    else:
+        line = f"- {today}: Play memory: {summary}"
+    return memory_file_type, clamp_prompt_section(line, max_chars=900)
+
+
+def trim_local_persona_memory_entries(text: str, *, max_entries: int) -> str:
+    lines = text.splitlines()
+    entry_indexes = [index for index, line in enumerate(lines) if line.lstrip().startswith("- ")]
+    if len(entry_indexes) <= max_entries:
+        return text.rstrip() + "\n"
+    first_keep_index = entry_indexes[-max_entries]
+    kept: list[str] = []
+    for index, line in enumerate(lines):
+        if index < first_keep_index and line.lstrip().startswith("- "):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip() + "\n"
+
+
+def append_local_persona_memory(memory: MemoryInsert, *, force: bool = False) -> bool:
+    if not force:
+        if os.environ.get("GWPLAYMATE_DISABLE_MEMORY_WRITES") == "1":
+            return False
+        if not settings.hermes_persona_file_memory_enabled:
+            return False
+    note = local_persona_note_from_memory(memory)
+    if not note:
+        return False
+    memory_file_type, line = note
+    path = local_persona_memory_path(memory.character_name, memory_type=memory_file_type)
+    if not path:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = path.read_text(encoding="utf-8") if path.exists() else local_persona_memory_heading(memory.character_name, memory_type=memory_file_type)
+    except OSError:
+        return False
+    existing_sanitized = sanitize_local_persona_notes_for_prompt(existing, max_chars=LOCAL_PERSONA_NOTE_LIMITS.get(path.suffix, 4200))
+    normalized_line = re.sub(r"\W+", " ", line.lower()).strip()
+    for existing_line in existing_sanitized.splitlines():
+        if re.sub(r"\W+", " ", existing_line.lower()).strip() == normalized_line:
+            return False
+    updated = existing.rstrip() + "\n" + line + "\n"
+    updated = trim_local_persona_memory_entries(updated, max_entries=max(20, settings.hermes_persona_file_memory_max_entries))
+    path.write_text(updated, encoding="utf-8")
+    return True
 
 
 def sanitize_prompt_context(text: str) -> str:
