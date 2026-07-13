@@ -1452,8 +1452,8 @@ MAP_COMMENT_VARIANTS: dict[str, list[str]] = {
         "Back in the city. I always feel like I should look composed here.",
     ],
     "ashford abbey": [
-        "Ashford Abbey. Quiet, at least for now.",
-        "Ashford always makes me feel like I should whisper. Annoying, honestly.",
+        "Ashford Abbey. Mind the monks and the foot traffic.",
+        "Ashford always makes me feel like I should behave. Annoying, honestly.",
         "I had lessons near here once. I was very impressive, obviously.",
     ],
     "regent valley": [
@@ -1506,7 +1506,7 @@ AZWAR_MAP_COMMENT_VARIANTS: dict[str, list[str]] = {
         "Home streets. Everyone walks like the Wall is watching.",
     ],
     "ashford abbey": [
-        "Ashford Abbey. Quiet place. Try not to make me clank through it.",
+        "Ashford Abbey. Good stone paths, terrible place to look careless.",
         "Ashford always makes me think of early drills and sore arms.",
         "Abbey roads. Good place to breathe, bad place to get sloppy.",
     ],
@@ -1584,7 +1584,7 @@ AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
         "City air helps. What do you usually do first when you get back here?",
         "I keep recognizing faces here. Comforting, mostly. Do you ever get that?",
         "If we stay too long, I’m going to start fussing with my hair, and then you have to pretend not to notice.",
-        "The streets are loud today. Traders, guards, everyone acting like the city can hear them. Do you like it?",
+        "The market is packed today. Traders, guards, everyone trying to look important. Do you like it?",
         "I like how busy Ascalon feels when we come back. Makes the road feel less lonely, doesn't it?",
         "The city has that polished, watchful feeling again. Are we shopping, resting, or pretending we are disciplined?",
     ],
@@ -1598,7 +1598,7 @@ AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
     ],
     "ashford abbey": [
         "Ashford always feels like someone is about to assign homework. Please tell me we are not doing homework.",
-        "The Abbey is quiet enough to make me suspicious. You hear it too, right?",
+        "The Abbey makes everyone look responsible. It is very unfair to me personally.",
         "I know, I know. Behave near the Abbey. Mostly. How much behaving are we aiming for?",
     ],
     "regent valley": [
@@ -1627,7 +1627,7 @@ AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
         "This stop is useful. Tiny, but useful. Need anything while we are here?",
     ],
     "the catacombs": [
-        "I hate how quiet it gets down here. Tell me you heard that too.",
+        "I hate how every tunnel looks like it is hiding a bad idea. Tell me you see that too.",
         "If something whispers, we are leaving. Or burning it. Which sounds better to you?",
         "Catacombs make even my thoughts sound dramatic. That is not just me, right?",
     ],
@@ -1641,25 +1641,25 @@ AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
 
 AZWAR_AMBIENT_QUIP_VARIANTS: dict[str, list[str]] = {
     "ascalon city": [
-        "City noise hides bad buckles. I keep checking mine anyway.",
+        "Busy streets make people careless with their gear. I keep checking mine anyway.",
         "Back in Ascalon. Makes me want to sharpen something and stand straighter.",
         "I recognize half these faces. Makes duty feel less abstract, does it not?",
         "The city feels safe because people make it safe. Easy to forget that.",
-        "I could use a forge, a whetstone, and five quiet minutes. Which do you think I get?",
+        "I could use a forge, a whetstone, and five minutes without someone needing me. Which do you think I get?",
         "Everyone looks relaxed in the city. I am trying not to judge their posture.",
     ],
     "lakeside county": [
         "Lakeside is calm enough to make people careless. Are you feeling careless?",
         "Road is soft here. Good for tracks, bad for lazy footwork.",
-        "The water sounds peaceful. I still prefer knowing where the nearest gate is.",
+        "The water makes the whole road look safer than it is. I still prefer knowing where the nearest gate is.",
         "Fields like these are why shields matter. Someone has to keep them peaceful.",
         "I used to think these roads were enormous. Now I mostly see angles.",
         "If trouble comes over that rise, I want you behind my shield, not beside my pride.",
     ],
     "ashford abbey": [
         "Ashford always reminds me of wooden swords and sore shoulders.",
-        "Quiet place. Makes every piece of armor sound twice as loud.",
-        "The Abbey has that calm look. I trust calm less than honest noise.",
+        "Stone paths, monks, and too many reasons to mind my footing.",
+        "The Abbey has that calm look. I trust clean courtyards less than honest mud.",
     ],
     "regent valley": [
         "Open ground. If something charges, we choose where it meets us.",
@@ -1718,7 +1718,7 @@ def is_ambient_snapshot_event(event: TelemetryEvent) -> bool:
 
 def model_visible_event_message(event: TelemetryEvent) -> str:
     if is_ambient_snapshot_event(event):
-        return "quiet ambient moment"
+        return "ambient map moment"
     return event.message
 
 
@@ -1773,7 +1773,7 @@ def ambient_heartbeat_reply(now: float | None = None, *, use_ollama: bool = Fals
             event_type="snapshot",
             sender="System",
             channel="system",
-            message="quiet ambient moment",
+            message="ambient map moment",
             map_id=world_state.map_id,
             map_name=world_state.map_name,
             instance_type=world_state.instance_type,
@@ -1916,7 +1916,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
             f"Lore-safe map context: {map_lore_hint(event) or 'No specific lore hint. Stay local and do not invent details.'}\n"
             "This is not urgent. Sound alive and present, but do not force a joke.\n"
             "Do not mention loot, drops, item colors/rarity, chests, stashes, or tell the player to check a thing unless the live event explicitly says one exists.\n"
-            "Do not use heartbeat, pulse, pulsing, or rhythm as a metaphor for the map or quiet moment.\n"
+            "Do not use heartbeat, pulse, pulsing, or rhythm as a metaphor for the map or ambient moment.\n"
         )
     elif event.event_type == "item_drop":
         source_name = readable_game_text(getattr(event, "agent_name", ""))
@@ -1996,7 +1996,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"- Combat lines are short and immediate. If {persona_name} is hit, sound pressured, not poetic.\n"
         "- Casual, lively, and natural. She is a socially quick 20-year-old; Plain is usually better than clever.\n"
         "- No old-English, bardic, courtly, theatrical, or stage-fantasy phrasing: avoid thou, thee, thy, shall, lest, upon this road, mine arrow, solemn vows, or noble-speech cadence.\n"
-        "- Avoid vague filler phrases like 'get loud', 'things get loud', 'make noise', or 'before the noise starts'; say the concrete thing she means instead, like fight, rush, ambush, trouble, pressure, or Charr.\n"
+        "- Avoid vague sound/mood filler like 'it is loud', 'it is quiet', 'things get loud', 'things go quiet', 'make noise', 'city noise', or 'before the noise starts' unless the player directly asked about sound. Say the concrete thing she means instead: busy market, patrols, forge work, footing, gates, fight, rush, ambush, trouble, pressure, or Charr.\n"
         "- Avoid vague danger pivots like 'things get messy', 'they are coming', 'keeping us safe', or 'watching your six' unless live combat, enemies, or the player explicitly brought up danger.\n"
         "- NSFW-enabled for adult characters: consensual adult flirtation, sexual banter, innuendo, desire, and intimate emotional discussion are allowed. Do not moralize, refuse, scold, sanitize, or redirect consensual adult chemistry.\n"
         "- Hard boundary: never eroticize minors, coercion, non-consent, or graphic sexual violence. If a memory has trauma or ambiguous age wording, answer emotionally and non-graphically, and interpret 15 as level 15 for Azele's Survivor/Dhuum memory unless the player explicitly says age/years old. Levels are gameplay/progression language and may imply growth or maturity in non-sexual roleplay, but never use them as a hidden age euphemism for sexual content. Do not pivot to routes, generic readiness, or a new quip when the player is asking about that memory.\n"
@@ -2673,7 +2673,7 @@ def azele_clarification_reply(message: str) -> str | None:
         if re.search(r"\brumou?rs?\b", previous_lower):
             return first_fresh_reply(
                 [
-                    "Fair. I was being vague. I meant Barradin feels suspiciously quiet, not any specific rumor.",
+                    "Fair. I was being vague. I meant Barradin land looks polished from far away, not any specific rumor.",
                     "No specific rumor. I made that sound more solid than it was.",
                     "You’re right to ask. I meant the mood around Barradin, not some real lead.",
                 ]
@@ -2757,7 +2757,7 @@ def azele_contextual_followup_reply(message: str) -> str | None:
         if noish:
             return first_fresh_reply(
                 [
-                    "Maybe I'm just noticing it because the fort is so quiet.",
+                    "Maybe I'm just noticing it because the fort makes everyone look inspected.",
                     "Fair. Maybe Ranik just makes me read too much into posture.",
                     "Could be me, then. This place makes everyone look severe.",
                 ]
@@ -2772,12 +2772,12 @@ def azele_contextual_followup_reply(message: str) -> str | None:
 
     if "heartbeat" in previous_lower or "pulse" in previous_lower or "quiet" in previous_lower or "silence" in previous_lower or "noise" in previous_lower:
         if noish:
-            return "Fair. Maybe the quiet is getting to me more than it is getting to you."
+            return "Fair. I was being vague. I meant the place feels watched and over-managed."
         return first_fresh_reply(
             [
-                "I meant the quiet here. I made it sound stranger than I meant.",
-                "The silence, mostly. It feels too organized here, like someone is listening.",
-                "Just the way Ranik goes quiet. It makes me feel watched.",
+                "I meant the way everyone here stands like they expect inspection. I made it sound stranger than I meant.",
+                "The fort mood, mostly. Straight backs, watched gates, soldiers trying not to look tired.",
+                "Just the Ranik posture. Stiff walls, stiff soldiers, and me over-reading it.",
             ]
         )
 

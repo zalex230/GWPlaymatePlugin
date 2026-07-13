@@ -205,7 +205,7 @@ class HermesDaemonTests(unittest.TestCase):
             event_type="snapshot",
             sender="System",
             channel="system",
-            message="quiet ambient moment",
+            message="ambient map moment",
             map_id=166,
             map_name="Green Hills County",
         )
@@ -3705,7 +3705,7 @@ class HermesDaemonTests(unittest.TestCase):
             should_speak=True,
             channel_override="CHANNEL_PARTY",
             urgency="LOW",
-            response="Generated quiet moment. What are you watching?",
+            response="Market looks busy. What are you watching?",
         )
         try:
             hermes_daemon.settings = replace(original_settings, hermes_ambient_use_ollama=True)
@@ -3732,7 +3732,7 @@ class HermesDaemonTests(unittest.TestCase):
             hermes_daemon.character_reply_with_ollama = original
 
         self.assertEqual(len(replies), 1)
-        self.assertEqual(replies[0].message, "Generated quiet moment. What are you watching?")
+        self.assertEqual(replies[0].message, "Market looks busy. What are you watching?")
 
     def test_ambient_snapshot_uses_local_quip_when_ambient_ollama_disabled(self) -> None:
         original = hermes_daemon.character_reply_with_ollama
@@ -3767,7 +3767,7 @@ class HermesDaemonTests(unittest.TestCase):
             hermes_daemon.character_reply_with_ollama = original
 
         self.assertEqual(len(replies), 1)
-        self.assertNotEqual(replies[0].message, "Generated quiet moment. What are you watching?")
+        self.assertNotEqual(replies[0].message, "Market looks busy. What are you watching?")
 
     def test_ambient_snapshot_rejects_invented_purple_loot_hook(self) -> None:
         event = event_from_game_log(
@@ -4096,7 +4096,7 @@ class HermesDaemonTests(unittest.TestCase):
             should_speak=True,
             channel_override="CHANNEL_PARTY",
             urgency="LOW",
-            response="City is calm for once. Want to use the quiet or move?",
+            response="City is busy today. Want to check supplies or head back out?",
         )
         try:
             hermes_daemon.settings = replace(original_settings, hermes_ambient_use_ollama=True)
@@ -4107,7 +4107,7 @@ class HermesDaemonTests(unittest.TestCase):
 
         self.assertIsNotNone(reply)
         assert reply is not None
-        self.assertEqual(reply.message, "City is calm for once. Want to use the quiet or move?")
+        self.assertEqual(reply.message, "City is busy today. Want to check supplies or head back out?")
         self.assertEqual(reply.metadata["trigger"], "ambient_heartbeat")
 
     def test_ambient_heartbeat_uses_short_ollama_timeout(self) -> None:
@@ -4129,7 +4129,7 @@ class HermesDaemonTests(unittest.TestCase):
                 should_speak=True,
                 channel_override="CHANNEL_PARTY",
                 urgency="LOW",
-                response="City is calm for once. Want to use the quiet or move?",
+                response="City is busy today. Want to check supplies or head back out?",
             )
 
         hermes_daemon.character_reply_with_ollama = capture_options
@@ -4178,14 +4178,14 @@ class HermesDaemonTests(unittest.TestCase):
         event = captured["event"]
         prompt = build_character_reply_prompt(event)  # type: ignore[arg-type]
         self.assertNotIn("ambient heartbeat", prompt.lower())
-        self.assertIn("quiet ambient moment", prompt.lower())
+        self.assertIn("ambient map moment", prompt.lower())
 
     def test_ambient_model_reply_rejects_heartbeat_metaphor(self) -> None:
         event = event_from_game_log(
             {
                 "sender": "System",
                 "channel": "system",
-                "message": "quiet ambient moment",
+                "message": "ambient map moment",
                 "metadata": {
                     "event_type": "snapshot",
                     "persona": "Azele",
