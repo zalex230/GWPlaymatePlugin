@@ -2046,6 +2046,11 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
                 "Answer as a level-15 close-call/loss memory: emotionally vivid, raw, proud, angry, or vulnerable, but not underage sexual content. "
                 "Do not pivot to routes, generic readiness, or a new quip.\n"
             )
+        if is_pet_progression_context(event.message):
+            social_hint += (
+                "Pet progression note: if the player says they got, tamed, chose, or need to level a wolf, stalker, warthog, bear, or ranger pet, "
+                f"treat it as {persona_name}'s companion animal/pet progression. Answer the pet and leveling plan directly; do not mistake it for gear, armor, or equipment.\n"
+            )
         task = "Reply directly to the player's latest party chat."
         context_block = (
             f"PLAYER JUST SAID: {event.message!r}\n"
@@ -2170,6 +2175,7 @@ def build_character_reply_prompt(event: TelemetryEvent) -> str:
         f"- If the player talks about {persona_name}'s voice, TTS, Kokoro, Bella, Heart, sound, or pronunciation, answer that directly. Do not pivot to Charr, combat, quests, or old context.\n"
         f"- If the player asks where {persona_name}'s name came from, where {persona_name} got the name, or what the name means, answer from {persona_name}'s personal background. For Meliora, include her mother and her lived origin in Ashford, Foible's Fair, and Regent Valley; do not answer only with etymology. Do not pivot to the current quest, Prince Rurik, Charr, or route planning.\n"
         f"- Dwarven Ale or alcohol consumables happen to {persona_name}; react directly to how it feels.\n"
+        f"- If the player says they got {persona_name} a wolf/stalker/warthog/bear or need to level it up, that means a ranger pet. React to the pet and leveling it, not gear.\n"
         f"- Inventory, Small Equipment Pack, and red iris flowers are storage; armor/clothing mentions are usually {persona_name}'s visible outfit/style change; answer the appearance/practical question directly. For Azele, answer longer skirt or her current mini skirt directly and assume it is Azele's gear/body/clothes.\n"
         "- If the player says loot or good drops are in the tunnels/chests, treat it as a loot-location continuation, not automatically as a command to start a tunnel run.\n"
         "- Gamer/GW slang: gg means good game/nice fight; ggwp/wp means well played; ty/thx means thanks; yw/np means no problem; res/rez means resurrect; brb/afk/bio are short breaks; omw means on my way; pull/aggro/kite/aoe/dps/heal/prot/wipe/drop have normal MMO meanings; purple/purp means purple-rarity loot; green means unique loot; tunnel run means The Scourge Beneath.\n"
@@ -2224,6 +2230,11 @@ def build_player_intent_retry_prompt(event: TelemetryEvent, rejected_reply: str,
         if is_elaboration_request_context(event.message)
         else "- Keep it to 1 or 2 complete sentences, then stop.\n"
     )
+    pet_instruction = (
+        "- The latest message is about a ranger pet or pet leveling. Mention the pet/wolf/stalker/warthog/bear and the leveling plan directly; do not talk about gear, armor, or equipment.\n"
+        if is_pet_progression_context(event.message)
+        else ""
+    )
     return (
         build_character_reply_prompt(event)
         + "\n\n"
@@ -2232,6 +2243,7 @@ def build_player_intent_retry_prompt(event: TelemetryEvent, rejected_reply: str,
         f"- Rejected draft: {rejected_reply!r}\n"
         "- Replace it with one complete, natural reply to the player's actual latest message or current event.\n"
         + concise_instruction
+        + pet_instruction
         + "- Anchor on the nouns, pronouns, question, joke, correction, or plan in the latest player message and recent transcript.\n"
         "- Finish the thought cleanly. Do not stop on dangling words like 'so we', 'because', 'and', or 'then'.\n"
         "- Do not answer a different topic. Do not use a generic check-in. Do not repeat the rejected draft.\n"
@@ -3371,6 +3383,8 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return False
     message = readable_game_text(event.message)
     recent_context = recent_conversation_context(limit=6, persona=event.persona)
+    if GENERIC_INTENT_MISS_PATTERN.search(reply):
+        return True
     if is_voice_preference_context(message):
         return not re.search(r"\b(?:voice|heart|bella|sound|sounds|suit|fits?|like|warmer|softer|better|me)\b", reply, re.IGNORECASE)
     if is_duke_gaban_search_context(message, event, recent_context):
@@ -3407,6 +3421,14 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
         return not re.search(r"\b(?:tunnel|catacomb|scourge|careful|pull|bail|reset|regroup)\b", reply, re.IGNORECASE)
     if is_pet_evolution_context(message):
         return not re.search(r"\b(?:pet|dire|hearty|evol|develop|level\s*11|level|sturdy|harder)\b", reply, re.IGNORECASE)
+    if is_pet_progression_context(message):
+        if re.search(r"\b(?:gear|armor|armour|equipment|straps?|buckles?|shield|sword)\b", reply, re.IGNORECASE) and not re.search(
+            r"\b(?:pet|wolf|wolves|stalker|warthog|bear|animal|level|train|raise|grow)\b",
+            reply,
+            re.IGNORECASE,
+        ):
+            return True
+        return False
     if is_preference_question_context(message):
         if re.search(
             r"\b(?:your call|up to you|whatever you want|depends|either works|i'?m fine with either|what are we doing|what'?s up)\b",
@@ -3414,17 +3436,11 @@ def misses_clear_player_intent(reply: str, event: TelemetryEvent) -> bool:
             re.IGNORECASE,
         ):
             return True
-        return not re.search(
-            r"\b(?:i prefer|i like|i want|i choose|i pick|my pick|my choice|honestly|favorite|favourite|better|practical|bold|stalkers?|melandru|wol(?:f|ves)|warthogs?|shield|fire|trail|city|lakeside|ascalon)\b",
-            reply,
-            re.IGNORECASE,
-        )
+        return False
     if is_devona_pet_context(message):
         return not re.search(r"\b(?:devona|pet|ranger|stalkers?|melandru|wol(?:f|ves)|warthogs?|animal)\b", reply, re.IGNORECASE)
     if is_social_banter_context(message):
-        return bool(
-            re.search(r"\b(?:what are we doing|what'?s up|i'?m here|i’m here|i'?m listening|i’m listening)\b", reply, re.IGNORECASE)
-        )
+        return bool(GENERIC_INTENT_MISS_PATTERN.search(reply))
     if is_red_iris_bag_context(message):
         return not re.search(r"\b(?:iris|irises|flower|bag|slot|space|nicholas|pack)\b", reply, re.IGNORECASE)
     if is_item_space_context(message):
@@ -3900,6 +3916,40 @@ def is_pet_evolution_context(message: str) -> bool:
     )
 
 
+def is_pet_progression_context(message: str) -> bool:
+    lowered = readable_game_text(message).lower()
+    if not lowered:
+        return False
+    pet_terms = r"(?:pet|animal|wolf|wolves|stalker|melandru\s+stalker|warthog|bear)"
+    if re.search(rf"\b(?:got|tamed|charmed|chose|picked|found|brought)\s+(?:you\s+|her\s+|him\s+|us\s+|a\s+|an\s+|the\s+|our\s+|your\s+)*{pet_terms}\b", lowered):
+        return True
+    if re.search(rf"\b{pet_terms}\b", lowered) and re.search(r"\b(?:level(?:ed|ing)?|lvl|train|raise|grow|evolve|dire|hearty)\b", lowered):
+        return True
+    if re.search(rf"\b(?:level(?:ed|ing)?|train|raise|grow)\s+(?:it|them|him|her|the\s+{pet_terms}|our\s+{pet_terms}|your\s+{pet_terms})\b", lowered):
+        return True
+    return False
+
+
+def companion_pet_progression_reply(persona: str, message: str) -> str:
+    persona_name = known_persona_name(persona) or persona or "Companion"
+    persona_key = persona_name.lower()
+    lowered = readable_game_text(message).lower()
+    pet = "stalker" if "stalker" in lowered or "melandru" in lowered else "wolf" if "wolf" in lowered else "pet"
+    if persona_key == "azwar":
+        if pet == "wolf":
+            return "Good. A wolf makes sense for me. We level it steady, keep it alive, and teach it to hold the line with us."
+        return "Good. We level it carefully, keep it alive, and make sure it learns discipline before bravery."
+    if persona_key == "meliora andru":
+        if pet == "wolf":
+            return "A wolf can work. We raise it patiently, let it learn our pace, and do not rush it into bad fights."
+        if pet == "stalker":
+            return "Good choice. A stalker learns by patience; we level it cleanly and let it earn every strike."
+        return "Good. We raise it properly: steady fights, no stupid risks, and plenty of room to learn."
+    if persona_key == "azele":
+        return "Good. We level it carefully, and if it makes me look competent while doing it, even better."
+    return "Good. We level it carefully and keep it alive long enough to become useful."
+
+
 def azele_pet_evolution_reply(message: str) -> str:
     return first_fresh_reply(
         [
@@ -4281,6 +4331,12 @@ VISIBLE_SELF_MANAGEMENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+GENERIC_INTENT_MISS_PATTERN = re.compile(
+    r"\b(?:what are we doing|what'?s up|i'?m here|i’m here|i'?m listening|i’m listening|"
+    r"keep talking to me|ask me properly|tell me what you need|ready when you are|your call|whatever you want)\b",
+    re.IGNORECASE,
+)
+
 
 def leaks_ambient_scheduler_metaphor(reply: str, event: TelemetryEvent) -> bool:
     if not is_ambient_snapshot_event(event):
@@ -4416,9 +4472,48 @@ def direct_chat_salvage_blocked(reply: str, event: TelemetryEvent) -> bool:
         return True
     if misdirects_voice_preference(reply, event):
         return True
+    if invents_unsupported_rumor(reply, event):
+        return True
+    if invents_unsupported_ashford_reference(reply, event):
+        return True
+    if invents_ambient_loot_hook(reply, event):
+        return True
+    if invents_nicholas_sandford_request(reply, event):
+        return True
+    if invents_fort_ranik_northlands_route(reply, event):
+        return True
+    if invents_level_up_pack_causality(reply, event):
+        return True
     if invents_self_duplicate(reply):
         return True
     return False
+
+
+def soft_accept_player_chat_reply(reply: str, event: TelemetryEvent) -> str | None:
+    if event.event_type != "player_chat" or event.channel != "party":
+        return None
+    candidate = repair_model_reply(reply)
+    if not candidate or direct_chat_salvage_blocked(candidate, event):
+        return None
+    if GENERIC_INTENT_MISS_PATTERN.search(candidate):
+        return None
+    if is_too_similar_to_recent_replies(candidate):
+        return None
+    if is_pet_progression_context(event.message) and re.search(
+        r"\b(?:gear|armor|armour|equipment|straps?|buckles?|shield|sword)\b",
+        candidate,
+        re.IGNORECASE,
+    ) and not re.search(r"\b(?:pet|wolf|wolves|stalker|warthog|bear|animal|level|train|raise|grow)\b", candidate, re.IGNORECASE):
+        return None
+    lines = split_gw_chat_lines(candidate, max_lines=6 if is_elaboration_request_context(event.message) else 4)
+    if not lines or any(DANGLING_REPLY_ENDING_PATTERN.search(line.rstrip(" .!?")) for line in lines):
+        return None
+    candidate = " ".join(lines).strip()
+    if not re.search(r"[.!?)]$", candidate):
+        candidate = f"{candidate}."
+    if model_reply_has_bad_shape(candidate):
+        return None
+    return candidate
 
 
 def salvage_direct_player_chat_reply(reply: str, event: TelemetryEvent) -> str | None:
@@ -4443,7 +4538,7 @@ def salvage_direct_player_chat_reply(reply: str, event: TelemetryEvent) -> str |
     try:
         return validate_model_reply(candidate, event)
     except Exception:
-        return None
+        return soft_accept_player_chat_reply(candidate, event)
 
 
 def repair_model_reply(reply: str) -> str:
@@ -4602,6 +4697,8 @@ def fallback_rule_decision(event: TelemetryEvent) -> HermesDecision:
             response = azele_fast_reply(event)
         elif persona.lower() == "meliora andru" and is_name_origin_context(event.message):
             response = meliora_name_origin_reply()
+        elif is_pet_progression_context(event.message):
+            response = companion_pet_progression_reply(persona, event.message)
         elif is_preference_question_context(event.message):
             response = companion_preference_reply(persona, event.message)
         else:
@@ -4759,6 +4856,8 @@ def azele_fast_reply(event: TelemetryEvent) -> str:
     if gw1_reply := azele_gw1_context_reply(resolve_gw1_context(event, recent_conversation_context(limit=6, persona=event.persona)), event):
         return gw1_reply
     quest = readable_game_text(event.active_quest_name)
+    if is_pet_progression_context(message):
+        return companion_pet_progression_reply(event.persona, message)
     if is_pet_evolution_context(message):
         return azele_pet_evolution_reply(message)
     if is_recent_failure_bailout_context(message):

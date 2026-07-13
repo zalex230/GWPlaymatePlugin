@@ -1546,6 +1546,39 @@ class HermesDaemonTests(unittest.TestCase):
             misses_clear_player_intent("Wolf. Direct, loyal, and less fussy.", event)
         )
 
+    def test_pet_progression_rejects_gear_misdirection(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "now that we got you a wolf, we'll have to level it up",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "missed clear player intent"):
+            validate_model_reply("It feels solid enough now. Thanks for getting me this gear.", event)
+        self.assertEqual(
+            validate_model_reply("Good. A wolf fits me; we level it steady and keep it alive.", event),
+            "Good. A wolf fits me; we level it steady and keep it alive.",
+        )
+        fallback = fallback_rule_decision(event)
+        self.assertRegex(fallback.response.lower(), r"wolf|pet|level")
+
+    def test_soft_accept_keeps_safe_concrete_preference_reply(self) -> None:
+        event = event_from_game_log(
+            {
+                "sender": "Player",
+                "channel": "party",
+                "message": "so, asking you again. wolf or melandru stalker?",
+                "metadata": {"event_type": "player_chat", "persona": "Azwar"},
+            }
+        )
+
+        reply = "Wolf suits me. It is loyal, direct, and does not waste motion."
+
+        self.assertEqual(validate_model_reply(reply, event), reply)
+
     def test_preference_questions_use_shorter_ollama_budget(self) -> None:
         event = event_from_game_log(
             {
